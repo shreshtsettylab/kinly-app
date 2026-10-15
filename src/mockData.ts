@@ -1,5 +1,5 @@
 export type Person = {
-  id: number;
+  id: string;
   name: string;
   initials: string;
   relationship: string;
@@ -12,7 +12,7 @@ export type Person = {
 
 export const people: Person[] = [
   {
-    id: 1,
+    id: 'maya',
     name: 'Maya Chen',
     initials: 'MC',
     relationship: 'Close friend',
@@ -23,7 +23,7 @@ export const people: Person[] = [
     note: 'Ask about the studio move. She mentioned feeling stretched lately.',
   },
   {
-    id: 2,
+    id: 'arjun',
     name: 'Arjun Mehta',
     initials: 'AM',
     relationship: 'Friend',
@@ -34,7 +34,7 @@ export const people: Person[] = [
     note: 'Keep the morning unhurried. A walk feels better than a full afternoon plan.',
   },
   {
-    id: 3,
+    id: 'elena',
     name: 'Elena Rossi',
     initials: 'ER',
     relationship: 'Colleague',
@@ -45,7 +45,7 @@ export const people: Person[] = [
     note: 'Bring the first draft and leave ten minutes for the broader conversation.',
   },
   {
-    id: 4,
+    id: 'noah',
     name: 'Noah Williams',
     initials: 'NW',
     relationship: 'Sibling',
@@ -56,7 +56,7 @@ export const people: Person[] = [
     note: 'You want to be present without making the lunch too structured.',
   },
   {
-    id: 5,
+    id: 'samira',
     name: 'Samira Patel',
     initials: 'SP',
     relationship: 'Mentor',
