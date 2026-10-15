@@ -21,7 +21,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { supabase } from './lib/supabase';
+import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, prompts, type Person as SeedPerson } from './mockData';
 
 type Page = 'home' | 'people' | 'plans' | 'reflections' | 'goals' | 'settings';
@@ -59,35 +59,22 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const loadData = async () => {
+  const loadData = () => {
     setLoading(true);
     setError('');
-    const peopleResult = await supabase.from('kinly_people').select('*').order('created_at');
-    if (peopleResult.error) { setError('Your workspace could not be loaded. Please try again.'); setLoading(false); return; }
-    let loadedPeople = (peopleResult.data || []) as Person[];
-    if (loadedPeople.length === 0) {
-      const inserted = await supabase.from('kinly_people').insert(seedPeople.map(({ id: _id, nextPlan: _nextPlan, nextPlanDate: _nextPlanDate, ...person }) => person)).select('*');
-      if (inserted.error) { setError('Your starter people could not be created. Please try again.'); setLoading(false); return; }
-      loadedPeople = (inserted.data || []) as Person[];
-      const seedPlans = [
-        { title: 'Dinner at Lupa', plan_date: '2026-10-16', plan_time: '19:00', person_id: loadedPeople.find((p) => p.name === 'Maya Chen')?.id || null, category: 'Social', context: 'A chance to catch up without rushing.' },
-        { title: 'Walk in Prospect Park', plan_date: '2026-10-17', plan_time: '10:30', person_id: loadedPeople.find((p) => p.name === 'Arjun Mehta')?.id || null, category: 'Wellbeing', context: 'Keep the morning unhurried.' },
-        { title: 'Project catch-up', plan_date: '2026-10-19', plan_time: '14:00', person_id: loadedPeople.find((p) => p.name === 'Elena Rossi')?.id || null, category: 'Work', context: 'Bring the first draft.' },
-      ];
-      await supabase.from('kinly_plans').insert(seedPlans);
-    }
-    const [plansResult, goalsResult] = await Promise.all([
-      supabase.from('kinly_plans').select('*').order('plan_date').order('plan_time'),
-      supabase.from('kinly_goals').select('*').order('created_at'),
-    ]);
-    if (plansResult.error || goalsResult.error) setError('Some workspace details could not be loaded.');
+    const loadedPeople = readLocalCollection<Person>('people', seedPeople);
+    const seedPlans: Plan[] = [
+      { id: 'dinner-at-lupa', title: 'Dinner at Lupa', plan_date: '2026-10-16', plan_time: '19:00', person_id: loadedPeople.find((person) => person.name === 'Maya Chen')?.id || null, category: 'Social', context: 'A chance to catch up without rushing.' },
+      { id: 'prospect-park-walk', title: 'Walk in Prospect Park', plan_date: '2026-10-17', plan_time: '10:30', person_id: loadedPeople.find((person) => person.name === 'Arjun Mehta')?.id || null, category: 'Wellbeing', context: 'Keep the morning unhurried.' },
+      { id: 'project-catch-up', title: 'Project catch-up', plan_date: '2026-10-19', plan_time: '14:00', person_id: loadedPeople.find((person) => person.name === 'Elena Rossi')?.id || null, category: 'Work', context: 'Bring the first draft.' },
+    ];
     setPeople(loadedPeople);
-    setPlans((plansResult.data || []) as Plan[]);
-    setGoals((goalsResult.data || []) as Goal[]);
+    setPlans(readLocalCollection<Plan>('plans', seedPlans));
+    setGoals(readLocalCollection<Goal>('goals', []));
     setLoading(false);
   };
 
-  useEffect(() => { void loadData(); }, []);
+  useEffect(() => { loadData(); }, []);
 
   const navigate = (nextPage: Page) => {
     setPage(nextPage);
@@ -106,16 +93,19 @@ function App() {
     if (!name) return;
     const relationship = String(form.get('relationship') || '').trim() || 'Person in your life';
     const values = { name, initials: name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(), relationship, detail: String(form.get('detail') || '').trim(), note: String(form.get('note') || '').trim(), color: '#526579' };
-    const result = editingId ? await supabase.from('kinly_people').update(values).eq('id', editingId) : await supabase.from('kinly_people').insert(values);
-    if (result.error) { setError('That person could not be saved.'); return; }
-    setModal(null); setEditingId(null); await loadData();
+    const nextPeople = editingId
+      ? people.map((person) => person.id === editingId ? { ...person, ...values } : person)
+      : [...people, { ...values, id: createLocalId() }];
+    writeLocalCollection('people', nextPeople);
+    setModal(null); setEditingId(null); loadData();
   };
 
   const deletePerson = async (id: string) => {
     if (!window.confirm('Remove this person from your directory?')) return;
-    const result = await supabase.from('kinly_people').delete().eq('id', id);
-    if (result.error) { setError('That person could not be removed.'); return; }
-    await loadData();
+    const nextPeople = people.filter((person) => person.id !== id);
+    writeLocalCollection('people', nextPeople);
+    writeLocalCollection('plans', plans.map((plan) => plan.person_id === id ? { ...plan, person_id: null } : plan));
+    loadData();
   };
 
   const savePlan = async (event: FormEvent<HTMLFormElement>) => {
@@ -126,16 +116,17 @@ function App() {
     const planTime = String(form.get('plan_time') || '');
     if (!title || !planDate || !planTime) return;
     const values = { title, plan_date: planDate, plan_time: planTime, person_id: String(form.get('person_id') || '') || null, category: String(form.get('category') || 'Personal'), context: String(form.get('context') || '').trim() };
-    const result = editingId ? await supabase.from('kinly_plans').update(values).eq('id', editingId) : await supabase.from('kinly_plans').insert(values);
-    if (result.error) { setError('That plan could not be saved.'); return; }
-    setModal(null); setEditingId(null); await loadData();
+    const nextPlans = editingId
+      ? plans.map((plan) => plan.id === editingId ? { ...plan, ...values } : plan)
+      : [...plans, { ...values, id: createLocalId() }];
+    writeLocalCollection('plans', nextPlans);
+    setModal(null); setEditingId(null); loadData();
   };
 
   const deletePlan = async (id: string) => {
     if (!window.confirm('Delete this plan?')) return;
-    const result = await supabase.from('kinly_plans').delete().eq('id', id);
-    if (result.error) { setError('That plan could not be deleted.'); return; }
-    await loadData();
+    writeLocalCollection('plans', plans.filter((plan) => plan.id !== id));
+    loadData();
   };
 
   const saveGoal = async (event: FormEvent<HTMLFormElement>) => {
@@ -145,22 +136,23 @@ function App() {
     if (!title) return;
     if (!editingId && activeGoals.length >= 3) { setError('You can keep up to three active monthly goals.'); return; }
     const values = { title, description: String(form.get('description') || '').trim(), category: String(form.get('category') || 'Relationships'), status: String(form.get('status') || 'active') as 'active' | 'completed' };
-    const result = editingId ? await supabase.from('kinly_goals').update(values).eq('id', editingId) : await supabase.from('kinly_goals').insert(values);
-    if (result.error) { setError('That goal could not be saved.'); return; }
-    setModal(null); setEditingId(null); await loadData();
+    const nextGoals = editingId
+      ? goals.map((goal) => goal.id === editingId ? { ...goal, ...values } : goal)
+      : [...goals, { ...values, id: createLocalId(), month_start: new Date().toISOString().slice(0, 10) }];
+    writeLocalCollection('goals', nextGoals);
+    setModal(null); setEditingId(null); loadData();
   };
 
   const deleteGoal = async (id: string) => {
     if (!window.confirm('Delete this goal?')) return;
-    const result = await supabase.from('kinly_goals').delete().eq('id', id);
-    if (result.error) { setError('That goal could not be deleted.'); return; }
-    await loadData();
+    writeLocalCollection('goals', goals.filter((goal) => goal.id !== id));
+    loadData();
   };
 
   const toggleGoal = async (goal: Goal) => {
-    const result = await supabase.from('kinly_goals').update({ status: goal.status === 'active' ? 'completed' : 'active' }).eq('id', goal.id);
-    if (result.error) { setError('That goal could not be updated.'); return; }
-    await loadData();
+    const nextGoals = goals.map((item) => item.id === goal.id ? { ...item, status: goal.status === 'active' ? 'completed' : 'active' } : item);
+    writeLocalCollection('goals', nextGoals);
+    loadData();
   };
 
   const openModal = (type: Modal, id: string | null = null) => { setModal(type); setEditingId(id); setError(''); };
