@@ -458,6 +458,13 @@ kbd {
 .decision-tradeoffs li { margin-bottom: 5px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .decision-next { display: flex; align-items: flex-start; gap: 9px; padding: 13px 15px; border-radius: 8px; color: var(--brand-900); background: var(--accent-bg); font-size: 12px; font-weight: 600; line-height: 1.5; }
 .decision-next svg { margin-top: 1px; flex-shrink: 0; color: var(--accent-fg); }
+.decision-evidence { display: block; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 10px; font-style: italic; line-height: 1.4; }
+.decision-reasons { margin-bottom: 14px; }
+.decision-reasons ul { margin: 8px 0 0; padding-left: 18px; }
+.decision-reasons li { margin-bottom: 5px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.decision-followup { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 13px 15px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--brand-500); background: var(--surface-bg); font-size: 12px; line-height: 1.5; }
+.decision-followup svg { margin-top: 1px; flex-shrink: 0; }
+.decision-followup strong { font-weight: 600; }
 
 /* ─── Reflections page ─────────────────────────────────────────────────────── */
 .reflections-page .page-heading-row { align-items: flex-start; }

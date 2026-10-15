@@ -30,7 +30,19 @@ type Plan = { id: string; title: string; plan_date: string; plan_time: string; p
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
 type Reflection = { id: string; text: string; created_at: string };
 type Modal = 'person' | 'plan' | 'goal' | null;
-type DecisionResult = { summary: string; options: { label: string; detail: string }[]; tradeoffs: string[]; nextStep: string; matchedPeople: Person[]; matchedPlans: Plan[] } | null;
+type DecisionOption = { label: string; detail: string; evidence: string };
+type DecisionResult = {
+  summary: string;
+  options: DecisionOption[];
+  reasonsToMeet: string[];
+  reasonsToPostpone: string[];
+  reasonsToGatherMore: string[];
+  tradeoffs: string[];
+  recommendation: string | null;
+  followUp: string | null;
+  matchedPeople: Person[];
+  matchedPlans: Plan[];
+} | null;
 
 const reflectionPrompts = [
   'What felt meaningful today?',
@@ -38,66 +50,231 @@ const reflectionPrompts = [
   'Who did I feel close to, and who did I miss?',
 ];
 
+function fmtDate(dateStr: string): string {
+  return new Date(`${dateStr}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
 function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[]): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
-  const matchedPeople = people.filter((p) => p.name.toLowerCase().includes(q) || p.relationship.toLowerCase().includes(q));
-  const matchedPlans = plans.filter((p) => p.title.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.context || '').toLowerCase().includes(q));
-  const matchedGoals = goals.filter((g) => g.title.toLowerCase().includes(q) || g.category.toLowerCase().includes(q));
+  const tokens = q.split(/\s+/).filter((t) => t.length > 1);
   const now = new Date().toISOString().slice(0, 10);
-  const upcoming = plans.filter((p) => p.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date));
-  const personName = matchedPeople[0]?.name;
-  const personPlans = personName ? plans.filter((p) => p.person_id === matchedPeople[0].id && p.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date)) : [];
 
-  let summary: string;
-  const options: { label: string; detail: string }[] = [];
+  const personMatches = (person: Person) => {
+    const haystack = `${person.name} ${person.relationship} ${person.detail} ${person.note}`.toLowerCase();
+    return q.includes(person.name.toLowerCase()) || tokens.some((token) => haystack.includes(token));
+  };
+  const matchedPeople = people.filter(personMatches);
+  const planMatches = (plan: Plan) => {
+    const linked = people.find((person) => person.id === plan.person_id);
+    const haystack = `${plan.title} ${plan.category} ${plan.context} ${linked?.name || ''}`.toLowerCase();
+    return q.includes(plan.title.toLowerCase()) || tokens.some((token) => haystack.includes(token));
+  };
+  const matchedPlans = plans.filter(planMatches);
+  const matchedGoals = goals.filter((goal) => {
+    const haystack = `${goal.title} ${goal.category} ${goal.description}`.toLowerCase();
+    return tokens.some((token) => haystack.includes(token));
+  });
+
+  const upcoming = plans.filter((plan) => plan.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date));
+  const person = matchedPeople[0];
+  const personName = person?.name;
+  const personPlans = person ? plans.filter((plan) => plan.person_id === person.id && plan.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date)) : [];
+  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && plan.plan_date < now) : [];
+  const activeGoals = goals.filter((goal) => goal.status === 'active');
+  const scheduleCount = upcoming.length;
+
+  const reasonsToMeet: string[] = [];
+  const reasonsToPostpone: string[] = [];
+  const reasonsToGatherMore: string[] = [];
   const tradeoffs: string[] = [];
-  let nextStep: string;
+  const options: DecisionOption[] = [];
+  let recommendation: string | null = null;
+  let followUp: string | null = null;
 
-  if (matchedPeople.length && personPlans.length) {
-    summary = `You have ${personPlans.length} upcoming plan${personPlans.length === 1 ? '' : 's'} with ${personName}. Their latest note says: “${matchedPeople[0].note || 'No note saved yet.'}”`;
-    options.push({ label: 'Keep the next plan', detail: `${personPlans[0].title} on ${new Date(personPlans[0].plan_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} at ${personPlans[0].plan_time.slice(0, 5)}.` });
-    options.push({ label: 'Reschedule for more space', detail: 'Move it to a less full day so the conversation does not feel rushed.' });
-    tradeoffs.push('Keeping the plan honours the relationship but commits your time sooner.');
-    tradeoffs.push('Rescheduling creates breathing room but may dilute the momentum of the connection.');
-    nextStep = `Open Plans and confirm or adjust “${personPlans[0].title}.”`;
-  } else if (matchedPeople.length) {
-    summary = `${personName} is in your circle with no upcoming plans. Your note: “${matchedPeople[0].note || 'No note saved yet.'}”`;
-    options.push({ label: 'Add a low-pressure plan', detail: 'A short walk or coffee this week keeps the connection warm without overcommitting.' });
-    options.push({ label: 'Hold off for now', detail: 'Wait until your schedule clears so the time together feels genuine.' });
-    tradeoffs.push('Reaching out soon sustains closeness.');
-    tradeoffs.push('Waiting protects your energy but may delay the relationship.');
-    nextStep = `Add a plan with ${personName} when the timing feels right.`;
+  const contextParts: string[] = [];
+
+  if (person) {
+    contextParts.push(`${personName} is saved in your circle as "${person.relationship}".`);
+    if (person.note) contextParts.push(`Your note about them: "${person.note}"`);
+    if (person.detail) contextParts.push(`Context you saved: "${person.detail}"`);
+  }
+
+  if (personPlans.length) {
+    contextParts.push(`You have ${personPlans.length} upcoming plan${personPlans.length === 1 ? '' : 's'} with ${personName}: ${personPlans.map((plan) => `"${plan.title}" on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}`).join('; ')}.`);
+    personPlans.forEach((plan) => { if (plan.context) contextParts.push(`Plan context for "${plan.title}": "${plan.context}"`); });
+  }
+
+  if (personPastPlans.length) {
+    contextParts.push(`You have ${personPastPlans.length} past plan${personPastPlans.length === 1 ? '' : 's'} with ${personName}.`);
+  }
+
+  if (matchedPlans.length && !person) {
+    const plan = matchedPlans[0];
+    contextParts.push(`This relates to a saved plan: "${plan.title}" (${plan.category}) on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}.`);
+    if (plan.context) contextParts.push(`Plan context: "${plan.context}"`);
+  }
+
+  if (matchedGoals.length) {
+    const goal = matchedGoals[0];
+    contextParts.push(`This connects to your ${goal.status === 'active' ? 'active' : 'completed'} goal: "${goal.title}" (${goal.category}).`);
+    if (goal.description) contextParts.push(`Goal description: "${goal.description}"`);
+  }
+
+  if (activeGoals.length) {
+    contextParts.push(`Your active monthly ${activeGoals.length === 1 ? 'goal is' : 'goals are'}: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.`);
+  }
+
+  if (scheduleCount) {
+    contextParts.push(`You have ${scheduleCount} upcoming plan${scheduleCount === 1 ? '' : 's'} in total.`);
+  }
+
+  // --- Person-centred decision ---
+  if (person) {
+    // Reasons to meet
+    if (personPlans.length) {
+      reasonsToMeet.push(`You already have "${personPlans[0].title}" planned with ${personName} on ${fmtDate(personPlans[0].plan_date)} — this plan already exists.`);
+    }
+    if (person.note) {
+      reasonsToMeet.push(`Your saved note about ${personName} — "${person.note}" — suggests there is something specific worth following up on.`);
+    }
+    if (!personPlans.length) {
+      reasonsToMeet.push(`${personName} has no upcoming plans in your calendar, so there may be room to add one.`);
+    }
+    if (matchedGoals.some((goal) => goal.category === 'Relationships' && goal.status === 'active')) {
+      reasonsToMeet.push(`You have an active Relationships goal: "${matchedGoals.find((goal) => goal.category === 'Relationships')?.title}" — meeting supports it.`);
+    }
+
+    // Reasons to postpone
+    if (scheduleCount >= 3) {
+      reasonsToPostpone.push(`You already have ${scheduleCount} upcoming plans. Adding another may spread your attention thin.`);
+    }
+    if (personPlans.length) {
+      reasonsToPostpone.push(`You already have a plan with ${personName} on ${fmtDate(personPlans[0].plan_date)}. Meeting again tonight may be redundant.`);
+    }
+    if (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')) {
+      reasonsToPostpone.push(`You have an active ${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.category} goal: "${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.title}". An evening at home might serve that.`);
+    }
+
+    // Reasons to gather more info
+    if (!person.note && !person.detail) {
+      reasonsToGatherMore.push(`You have not saved a note or context for ${personName}. Adding one would make this decision clearer.`);
+    }
+    reasonsToGatherMore.push(`Check how you feel physically and socially tonight — your saved data cannot tell you your current energy level.`);
+
+    // Options with evidence
+    if (personPlans.length) {
+      options.push({ label: 'Keep the existing plan', detail: `You already have "${personPlans[0].title}" with ${personName} on ${fmtDate(personPlans[0].plan_date)} at ${personPlans[0].plan_time.slice(0, 5)}. Consider whether tonight is in addition to that or instead of it.`, evidence: `Saved plan: "${personPlans[0].title}" on ${personPlans[0].plan_date} at ${personPlans[0].plan_time}.` });
+    } else {
+      options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your evening.`, evidence: `${personName} has no upcoming plans in your saved data.` });
+    }
+    options.push({ label: 'Postpone and protect the evening', detail: `Stay home tonight and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: scheduleCount >= 3 ? `You have ${scheduleCount} upcoming plans already.` : `No specific plan with ${personName} would be disrupted.` });
+
+    // Trade-offs
+    tradeoffs.push('Meeting tonight sustains closeness, but if your energy is low it may not feel meaningful to either of you.');
+    tradeoffs.push('Postponing protects your energy, but delays the follow-through your note suggests matters.');
+    if (personPlans.length) tradeoffs.push('Adding a second plan so close to an existing one may dilute the quality of both.');
+
+    // Recommendation logic
+    const meetSignal = (person.note ? 1 : 0) + (matchedGoals.some((goal) => goal.category === 'Relationships') ? 1 : 0) + (personPlans.length ? 1 : 0);
+    const postponeSignal = (scheduleCount >= 3 ? 1 : 0) + (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing') ? 1 : 0) + (personPlans.length ? 1 : 0);
+
+    if (meetSignal >= 2 && postponeSignal <= 1) {
+      recommendation = `Based on your saved notes and goals, meeting ${personName} seems well-supported — but only if your energy tonight can hold it. If not, postponing is a reasonable choice.`;
+    } else if (postponeSignal >= 2 && meetSignal <= 1) {
+      recommendation = `Your saved plans and goals suggest the evening might be better spent resting. Consider reaching out to ${personName} to set something up for later this week instead.`;
+    } else {
+      recommendation = null;
+      followUp = `What is your energy like right now? Your saved data does not capture how today has felt, and that matters as much as the plans and notes here.`;
+    }
+
+  // --- Plan-centred decision (no person matched) ---
   } else if (matchedPlans.length) {
-    summary = `This relates to “${matchedPlans[0].title}” — a ${matchedPlans[0].category.toLowerCase()} plan on ${new Date(matchedPlans[0].plan_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.`;
-    options.push({ label: 'Go ahead with it', detail: matchedPlans[0].context || 'The plan is already set — trust the intention you captured.' });
-    options.push({ label: 'Reconsider the time', detail: 'Check whether the slot competes with a priority you care about.' });
-    tradeoffs.push('Following through builds trust with yourself and others.');
-    tradeoffs.push('Adjusting now is cheaper than dragging through a plan that does not fit.');
-    nextStep = `Review the plan details and decide whether the current time still works.`;
+    const plan = matchedPlans[0];
+    const linkedPerson = people.find((person) => person.id === plan.person_id);
+
+    reasonsToMeet.push(`"${plan.title}" is already saved for ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}.`);
+    if (plan.context) reasonsToMeet.push(`Your saved context: "${plan.context}"`);
+    if (linkedPerson) reasonsToMeet.push(`This plan is linked to ${linkedPerson.name}.`);
+
+    reasonsToPostpone.push(`The plan is set for ${fmtDate(plan.plan_date)} — meeting tonight would be in addition to, not instead of, that.`);
+    if (scheduleCount >= 3) reasonsToPostpone.push(`You have ${scheduleCount} upcoming plans already.`);
+
+    if (!plan.context) reasonsToGatherMore.push(`This plan has no saved context. Adding one would clarify whether tonight fits.`);
+    reasonsToGatherMore.push(`Check whether anything else on your calendar tonight conflicts.`);
+
+    options.push({ label: 'Go ahead with the saved plan', detail: `"${plan.title}" is already on your calendar for ${fmtDate(plan.plan_date)}. Trust the intention you captured.`, evidence: `Saved plan: "${plan.title}" on ${plan.plan_date} at ${plan.plan_time}.` });
+    options.push({ label: 'Reconsider the timing', detail: `Review whether the current slot competes with a rest or wellbeing goal before confirming.`, evidence: activeGoals.length ? `Active goals: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.` : `No active goals saved.` });
+
+    tradeoffs.push('Following through on a saved plan builds trust with yourself.');
+    tradeoffs.push('Adjusting now is easier than dragging through a plan that no longer fits.');
+
+    if (linkedPerson && plan.context) {
+      recommendation = `Your saved context for "${plan.title}" suggests the plan is intentional. Unless something has shifted today, keeping it seems reasonable.`;
+    } else {
+      recommendation = null;
+      followUp = `What has changed since you saved "${plan.title}"? If the context still feels right, keeping the plan makes sense.`;
+    }
+
+  // --- Goal-centred decision ---
   } else if (matchedGoals.length) {
-    summary = `This connects to your goal: “${matchedGoals[0].title}.” It is ${matchedGoals[0].status === 'active' ? 'an active priority' : 'completed'} in the ${matchedGoals[0].category} category.`;
-    options.push({ label: 'Take a small step', detail: 'Choose one concrete action this week that moves the goal forward.' });
-    options.push({ label: 'Pause and revisit', detail: 'Let it sit if your attention is needed elsewhere right now.' });
+    const goal = matchedGoals[0];
+
+    if (goal.status === 'active') {
+      reasonsToMeet.push(`Your active goal "${goal.title}" (${goal.category}) could benefit from a concrete step this week.`);
+      if (goal.description) reasonsToMeet.push(`Goal description: "${goal.description}"`);
+    }
+    reasonsToPostpone.push(`"${goal.title}" is a monthly goal — there is time, and not every evening needs to advance it.`);
+    reasonsToGatherMore.push(`Consider which specific action would move "${goal.title}" forward before committing tonight.`);
+
+    options.push({ label: 'Take a small step toward it', detail: `Choose one concrete action this week that moves "${goal.title}" forward.`, evidence: `Active goal: "${goal.title}" in ${goal.category}.` });
+    options.push({ label: 'Pause and revisit', detail: `Let the goal sit if your attention is needed elsewhere tonight.`, evidence: `Monthly goal — no immediate deadline in your saved data.` });
+
     tradeoffs.push('A small step sustains momentum without overwhelming your week.');
-    tradeoffs.push('Pausing avoids overcommitting but risks losing the thread.');
-    nextStep = `Open Goals and check whether “${matchedGoals[0].title}” still fits this month.`;
+    tradeoffs.push('Pausing avoids overcommitting but risks losing the thread of the goal.');
+
+    if (goal.status === 'active' && goal.description) {
+      recommendation = `Your goal "${goal.title}" has a description, which suggests you have thought about it. A small step tonight could be worthwhile if your evening is otherwise open.`;
+    } else {
+      recommendation = null;
+      followUp = `What would a "small step" toward "${goal.title}" look like concretely? Deciding that first would make tonight's choice clearer.`;
+    }
+
+  // --- No match, but upcoming plans exist ---
   } else if (upcoming.length) {
-    summary = `No exact match found, but your next plan is “${upcoming[0].title}” on ${new Date(upcoming[0].plan_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.`;
-    options.push({ label: 'Focus on the next plan', detail: 'Direct your attention there and revisit this question afterwards.' });
-    options.push({ label: 'Clear the deck first', detail: 'Finish or defer what is open before adding anything new.' });
-    tradeoffs.push('Attending to what is already planned keeps your word intact.');
-    tradeoffs.push('Clearing space reduces stress but may delay a relationship or commitment.');
-    nextStep = 'Open Plans to review what is coming up and decide what to protect.';
+    contextParts.push(`No saved person, plan, or goal matched your question. Your next upcoming plan is "${upcoming[0].title}" on ${fmtDate(upcoming[0].plan_date)}.`);
+
+    reasonsToGatherMore.push(`No saved data matched this question. Try searching by a person's name or a plan title.`);
+    reasonsToGatherMore.push(`Consider whether this question relates to someone or something not yet in your saved data.`);
+
+    options.push({ label: 'Focus on your next plan', detail: `"${upcoming[0].title}" is coming up on ${fmtDate(upcoming[0].plan_date)}.`, evidence: `Next upcoming plan: "${upcoming[0].title}".` });
+    options.push({ label: 'Add context first', detail: `Add a person or plan related to this question so future decisions can draw on it.`, evidence: `No match found for: "${query}".` });
+
+    tradeoffs.push('Acting on what is already planned keeps your commitments intact.');
+    tradeoffs.push('Pausing to add context now makes future decisions sharper.');
+
+    recommendation = null;
+    followUp = `Who or what is this question about? Try adding them to your People or Plans so the decision has something to work with.`;
+
+  // --- No data at all ---
   } else {
-    summary = 'You have no saved people, plans, or goals matching this question yet. Start by adding one person or plan to give the decision some shape.';
-    options.push({ label: 'Add a person', detail: 'Name someone who is on your mind so future decisions can include them.' });
-    options.push({ label: 'Add a plan', detail: 'Capture one intention for the week so you can weigh competing choices.' });
+    contextParts.push('You have no saved people, plans, or goals yet. There is nothing in your workspace for this question to draw on.');
+
+    reasonsToGatherMore.push('No saved people, plans, or goals exist yet. Adding even one would give this decision shape.');
+
+    options.push({ label: 'Add a person', detail: 'Name someone who is on your mind so future decisions can include them.', evidence: 'No people saved yet.' });
+    options.push({ label: 'Add a plan', detail: 'Capture one intention for the week so you can weigh competing choices.', evidence: 'No plans saved yet.' });
+
     tradeoffs.push('Adding structure now makes later decisions clearer.');
     tradeoffs.push('Staying open avoids premature commitment but keeps things vague.');
-    nextStep = 'Add a person or a plan, then return to this question.';
+
+    recommendation = null;
+    followUp = `Who is this question about? Start by adding them as a person — then ask again.`;
   }
-  return { summary, options, tradeoffs, nextStep, matchedPeople, matchedPlans };
+
+  const summary = contextParts.join(' ');
+
+  return { summary, options, reasonsToMeet, reasonsToPostpone, reasonsToGatherMore, tradeoffs, recommendation, followUp, matchedPeople, matchedPlans };
 }
 
 const navigation: { id: Page; label: string; icon: typeof Home }[] = [
@@ -303,7 +480,18 @@ function GoalsPage({ goals, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]
 function EmptyInline({ text, action, onClick }: { text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span>{text}</span><button className="card-link" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
 function DecisionPanel({ decision }: { decision: NonNullable<DecisionResult> }) {
-  return <div className="decision-panel"><div className="decision-header"><span className="card-kicker">DECISION SUPPORT</span><p className="decision-summary">{decision.summary}</p></div>{decision.matchedPeople.length > 0 && <div className="decision-match"><Users size={14} /><span>Related: {decision.matchedPeople.map((p) => p.name).join(', ')}</span></div>}{decision.matchedPlans.length > 0 && <div className="decision-match"><CalendarDays size={14} /><span>Related plans: {decision.matchedPlans.map((p) => p.title).join(', ')}</span></div>}<div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p></div>)}</div><div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div><div className="decision-next"><Sparkles size={15} /><span>{decision.nextStep}</span></div></div>;
+  return <div className="decision-panel">
+    <div className="decision-header"><span className="card-kicker">DECISION SUPPORT — FROM YOUR SAVED DATA</span><p className="decision-summary">{decision.summary}</p></div>
+    {decision.matchedPeople.length > 0 && <div className="decision-match"><Users size={14} /><span>Related: {decision.matchedPeople.map((p) => p.name).join(', ')}</span></div>}
+    {decision.matchedPlans.length > 0 && <div className="decision-match"><CalendarDays size={14} /><span>Related plans: {decision.matchedPlans.map((p) => p.title).join(', ')}</span></div>}
+    <div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p><span className="decision-evidence">{option.evidence}</span></div>)}</div>
+    {decision.reasonsToMeet.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO MEET / GO AHEAD</span><ul>{decision.reasonsToMeet.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+    {decision.reasonsToPostpone.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO POSTPONE</span><ul>{decision.reasonsToPostpone.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+    {decision.reasonsToGatherMore.length > 0 && <div className="decision-reasons"><span className="card-kicker">GATHER MORE INFORMATION</span><ul>{decision.reasonsToGatherMore.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+    <div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div>
+    {decision.recommendation && <div className="decision-next"><Sparkles size={15} /><span><strong>Tentative recommendation: </strong>{decision.recommendation}</span></div>}
+    {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
+  </div>;
 }
 
 function ReflectionsPage({ reflections, onSave, onDelete }: { reflections: Reflection[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void }) {
