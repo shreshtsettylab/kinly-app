@@ -27,7 +27,7 @@ import {
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 
-type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings';
+type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
 type Person = Omit<SeedPerson, 'id'> & { id: string };
 type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
@@ -40,6 +40,12 @@ type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reaso
 type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
 type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling };
 type Energy = 'low' | 'okay' | 'good' | null;
+type Social = 'company' | 'quiet' | null;
+type Recharge = 'alone' | 'one-on-one' | 'small-group' | '';
+// Weekdays are stored as numbers, 0 = Sunday … 6 = Saturday, matching Date.getDay().
+type Profile = { name: string; pronouns: string; recharge: Recharge; freeEvenings: number[]; intention: string; weeklyGoal: number; quietDays: number[] };
+type CheckIn = { date: string; energy: Energy; social: Social; freeTonight: boolean | null; mood: string };
+type DayContext = { energy: Energy; social: Social; freeTonight: boolean | null; quietToday: boolean; recharge: Recharge; freeEvenings: number[]; intention: string };
 type DeeperAnswer = { verdict: Verdict['tone']; headline: string; reason: string; points: string[] };
 type DeeperState = { status: 'idle' | 'loading' | 'done' | 'error'; answer?: DeeperAnswer; error?: string };
 type DeeperControls = { enabled: boolean; state: DeeperState; onRequest: () => void; onEnable: () => void };
@@ -157,9 +163,39 @@ function glanceFor({ last, next, feeling }: PersonInsight): Glance[] {
   ];
 }
 
-function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[], energy: Energy = null): DecisionResult {
+// Words in a personal intention ("see family more") matched against how each person is described.
+const intentionGroups = [
+  ['family', 'sibling', 'brother', 'sister', 'parent', 'parents', 'mother', 'father', 'mom', 'mum', 'dad', 'cousin', 'aunt', 'uncle', 'grandparent', 'partner', 'spouse'],
+  ['friend', 'friends', 'friendship'],
+  ['work', 'colleague', 'colleagues', 'coworker', 'mentor', 'team'],
+];
+
+function matchesIntention(person: Person, intention: string): boolean {
+  if (!intention.trim()) return false;
+  const words = new Set(wordsOf(intention));
+  if (wordsOf(person.name).some((part) => part.length > 1 && words.has(part))) return true;
+  const described = wordsOf(person.relationship);
+  return intentionGroups.some((group) => group.some((word) => words.has(word)) && group.some((word) => described.includes(word)));
+}
+
+function nextFreeEvening(freeEvenings: number[]): string | null {
+  if (!freeEvenings.length) return null;
+  const now = new Date();
+  for (let offset = 0; offset < 7; offset++) {
+    const weekday = (now.getDay() + offset) % 7;
+    if (!freeEvenings.includes(weekday)) continue;
+    if (offset === 0) return now.getHours() < 18 ? 'Tonight is usually a free evening for you.' : null;
+    return `${weekdayNames[weekday]} is your next usually free evening.`;
+  }
+  return null;
+}
+
+const noDay: DayContext = { energy: null, social: null, freeTonight: null, quietToday: false, recharge: '', freeEvenings: [], intention: '' };
+
+function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[], day: DayContext = noDay): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
+  const { energy } = day;
   // Specific intents first (cancel, talking points, who to contact); then "Should I…" decisions,
   // recall ("how did it go") and timing ("when") questions.
   const kind: NonNullable<DecisionResult>['kind'] = /\b(cancel|skip|bail|reschedule|call off)\b/.test(q) ? 'cancel'
@@ -244,6 +280,8 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (daysUntil(target.plan_date) === 0) keep.push('It is today, so cancelling now may land hard.');
     if (energy === 'good') keep.push('You said your energy is good.');
     if (energy === 'low') drop.push('You said your energy is low.');
+    if (day.social === 'quiet') drop.push('You said you want some quiet today.');
+    if (day.social === 'company') keep.push('You said you’re up for company today.');
     if (weekCount >= 4) drop.push(`You have ${weekCount} plans in the next 7 days.`);
     if (restGoal) drop.push(`You have a ${restGoal.category.toLowerCase()} goal: "${restGoal.title}".`);
     if (targetInsight?.feeling?.tone === 'negative') drop.push(`Last time with ${who} felt draining.`);
@@ -277,14 +315,15 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
       .filter((entry) => !entry.insight.next)
       .map((entry) => ({ ...entry, days: entry.insight.last ? -daysUntil(entry.insight.last.plan_date) : null }))
       .sort((a, b) => {
-        // Longest gap first; warm connections get a nudge up, draining ones a nudge down.
-        const weight = (entry: typeof a) => (entry.days ?? 30) + (entry.insight.feeling?.tone === 'positive' ? 14 : 0) - (entry.insight.feeling?.tone === 'negative' ? 14 : 0);
+        // Longest gap first; warm connections and people your intention mentions get a nudge up.
+        const weight = (entry: typeof a) => (entry.days ?? 30) + (entry.insight.feeling?.tone === 'positive' ? 14 : 0) - (entry.insight.feeling?.tone === 'negative' ? 14 : 0) + (matchesIntention(entry.person, day.intention) ? 20 : 0);
         return weight(b) - weight(a);
       });
     const top = ranked[0];
     if (!top) return { ...base, verdict: { tone: 'info', headline: 'Everyone has something planned', reason: 'You already have an upcoming plan with each person in your circle.' } };
     const name = top.person.name.split(' ')[0];
     const verdict: Verdict = { tone: 'go', headline: `Reach out to ${name}`, reason: top.days !== null ? `It has been ${top.days} days since your last plan together${top.insight.feeling?.tone === 'positive' ? ', and last time felt good' : ''}. A short message is enough.` : `You have nothing saved with ${name} yet — a short message is an easy start.` };
+    if (matchesIntention(top.person, day.intention)) verdict.reason += ` It fits your intention: “${day.intention}”.`;
     const glance = ranked.slice(0, 3).map(({ person: item, insight: itemInsight, days }) => ({ label: item.name, value: days !== null ? `Last together ${days} days ago${itemInsight.feeling ? ` · ${lowerFirst(itemInsight.feeling.label)}` : ''}` : 'No time together saved yet' }));
     return { ...base, verdict, glance, matchedPeople: ranked.slice(0, 3).map((entry) => entry.person) };
   }
@@ -350,10 +389,18 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (insight.feeling?.tone === 'negative') reasonsToPostpone.push(`Last time with ${firstName} felt draining.`);
     if (energy === 'good' && !lightTouch) reasonsToMeet.push('You said your energy is good.');
     if (energy === 'low' && !lightTouch) reasonsToPostpone.push('You said your energy is low.');
+    if (day.social === 'company' && !lightTouch) reasonsToMeet.push('You said you’re up for company today.');
+    if (day.social === 'quiet' && !lightTouch) reasonsToPostpone.push('You said you want some quiet today.');
+    const tonightish = when === 'tonight' || when === 'right now';
+    if (day.freeTonight === true && tonightish && !lightTouch) reasonsToMeet.push('You said tonight is free.');
+    if (day.freeTonight === false && tonightish && !lightTouch) reasonsToPostpone.push('You said tonight isn’t really free.');
+    if (day.quietToday && !lightTouch) reasonsToPostpone.push('Today is one of your quiet days.');
+    if (matchesIntention(person, day.intention)) reasonsToMeet.push(`It fits your intention: “${day.intention}”.`);
 
     const score = reasonsToMeet.length - reasonsToPostpone.length;
     if (score > 0) {
-      verdict = { tone: 'go', headline: lightTouch ? 'Yes — reach out' : 'Yes — go for it', reason: [reasonsToMeet[0], reasonsToPostpone[0] && `Just note: ${lowerFirst(reasonsToPostpone[0])}`].filter(Boolean).join(' ') };
+      const freeEvening = lightTouch || soon ? null : nextFreeEvening(day.freeEvenings);
+      verdict = { tone: 'go', headline: lightTouch ? 'Yes — reach out' : 'Yes — go for it', reason: [reasonsToMeet[0], reasonsToPostpone[0] && `Just note: ${lowerFirst(reasonsToPostpone[0])}`, freeEvening].filter(Boolean).join(' ') };
     } else if (score < 0) {
       verdict = { tone: 'hold', headline: `Not ${when}`, reason: `${reasonsToPostpone[0]} ${soon ? 'Save your energy for that.' : `Suggest another time with ${firstName} instead.`}` };
     } else {
@@ -368,7 +415,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (nextPlan) {
       options.push({ label: 'Keep the existing plan', detail: `You already have "${nextPlan.title}" with ${personName} on ${fmtDate(nextPlan.plan_date)} at ${fmtTime(nextPlan.plan_time)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${nextPlan.title}" on ${fmtDate(nextPlan.plan_date)} at ${fmtTime(nextPlan.plan_time)}.` });
     } else {
-      options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your week.`, evidence: `${personName} has no upcoming plans in your saved data.` });
+      options.push({ label: 'Add a low-pressure plan', detail: day.recharge === 'small-group' ? `Something small with ${personName} and a friend or two this week could keep it light and easy.` : `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your week.${day.recharge === 'alone' ? ' Leave some time to yourself afterwards.' : ''}`, evidence: `${personName} has no upcoming plans in your saved data.` });
     }
     options.push({ label: 'Postpone and protect your time', detail: `Hold off and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: weekCount >= 3 ? `You have ${weekCount} plans in the next 7 days.` : `No specific plan with ${personName} would be disrupted.` });
 
@@ -444,6 +491,10 @@ const navigation: { id: Page; label: string; icon: typeof Home }[] = [
 
 const categories = ['Social', 'Work', 'Family', 'Learning', 'Wellbeing', 'Rest', 'Personal'];
 const goalCategories = ['Work', 'Learning', 'Relationships', 'Wellbeing', 'Rest'];
+const defaultProfile: Profile = { name: 'Jordan Lee', pronouns: '', recharge: '', freeEvenings: [], intention: '', weeklyGoal: 0, quietDays: [] };
+const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const weekdayOrder = [1, 2, 3, 4, 5, 6, 0];
+
 // Muted, gender-neutral avatar colours that sit with the charcoal and slate palette.
 const personColors = ['#526579', '#3A5470', '#2E3C4D', '#4D6474', '#5B6F63', '#7A6A5C'];
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -469,7 +520,8 @@ function Avatar({ person, size = 'md' }: { person: Person; size?: 'xs' | 'sm' | 
 function App() {
   const [page, setPage] = useState<Page>('home');
   const [personId, setPersonId] = useState<string | null>(null);
-  const [profileName, setProfileName] = useState('');
+  const [profile, setProfile] = useState<Profile>(defaultProfile);
+  const [checkins, setCheckins] = useState<CheckIn[]>([]);
   const [presetPersonId, setPresetPersonId] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
@@ -479,7 +531,10 @@ function App() {
   const [search, setSearch] = useState('');
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
-  const [energy, setEnergy] = useState<Energy>(null);
+  const todayKey = localDateKey();
+  const todayCheckIn = checkins.find((checkin) => checkin.date === todayKey);
+  const energy = todayCheckIn?.energy ?? null;
+  const profileName = profile.name;
   const [aiEnabled, setAiEnabled] = useState(false);
   const [deeper, setDeeper] = useState<DeeperState>({ status: 'idle' });
   const latestQuestion = useRef('');
@@ -506,7 +561,8 @@ function App() {
       { id: 'coffee-with-maya-reflection', text: 'Coffee with Maya felt warm and easy. She needs room to think out loud before she wants suggestions. Next time, ask how the studio move is going and just listen.', created_at: new Date(Date.now() - 9 * 86400000).toISOString(), person_id: mayaId },
     ];
     setReflections(readLocalCollection<Reflection>('reflections', seedReflections));
-    setProfileName(readLocalCollection<{ name: string }>('profile', [{ name: 'Jordan Lee' }])[0]?.name || '');
+    setProfile({ ...defaultProfile, ...readLocalCollection<Partial<Profile>>('profile', [defaultProfile])[0] });
+    setCheckins(readLocalCollection<CheckIn>('checkins', []));
     setAiEnabled(readLocalCollection<{ deeperAnswers: boolean }>('settings', [{ deeperAnswers: false }])[0]?.deeperAnswers === true);
     setLoading(false);
   };
@@ -637,14 +693,25 @@ function App() {
     return on ? 'Deeper answers are on. Nothing is sent until you tap “Deeper answer”.' : 'Deeper answers are off. Nothing will be sent to Claude.';
   };
 
-  const saveProfileName = (name: string): string => {
-    writeLocalCollection('profile', [{ name: name.trim() }]);
-    setProfileName(name.trim());
-    return name.trim() ? `Saved. Kinly will call you ${name.trim()}.` : 'Name cleared.';
+  const saveProfile = (patch: Partial<Profile>) => {
+    const next = { ...profile, ...patch };
+    writeLocalCollection('profile', [next]);
+    setProfile(next);
   };
 
+  // One check-in per day; the newest 90 days are kept so patterns can be drawn from them.
+  const updateCheckIn = (patch: Partial<CheckIn>) => {
+    const next: CheckIn = { ...(todayCheckIn ?? { date: todayKey, energy: null, social: null, freeTonight: null, mood: '' }), ...patch };
+    const list = [...checkins.filter((checkin) => checkin.date !== todayKey), next].sort((a, b) => a.date.localeCompare(b.date)).slice(-90);
+    writeLocalCollection('checkins', list);
+    setCheckins(list);
+  };
+  const setEnergy = (value: Energy) => updateCheckIn({ energy: value });
+
+  const day = useMemo<DayContext>(() => ({ energy: todayCheckIn?.energy ?? null, social: todayCheckIn?.social ?? null, freeTonight: todayCheckIn?.freeTonight ?? null, quietToday: profile.quietDays.includes(new Date().getDay()), recharge: profile.recharge, freeEvenings: profile.freeEvenings, intention: profile.intention }), [todayCheckIn, profile]);
+
   const exportData = (): string => {
-    const backup = { app: 'kinly', version: 1, exported_at: new Date().toISOString(), people, plans, goals, reflections };
+    const backup = { app: 'kinly', version: 2, exported_at: new Date().toISOString(), people, plans, goals, reflections, profile: [profile], checkins };
     const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a');
     link.href = url;
@@ -655,7 +722,7 @@ function App() {
   };
 
   const importData = async (file: File): Promise<string> => {
-    let data: Partial<Record<CollectionKey, unknown>>;
+    let data: Partial<Record<CollectionKey | 'profile' | 'checkins', unknown>>;
     try {
       data = JSON.parse(await file.text());
     } catch {
@@ -665,13 +732,18 @@ function App() {
     if (!valid) return 'That file does not look like a Kinly backup, so nothing was changed.';
     if (!window.confirm('Replace everything saved in this browser with this backup?')) return '';
     collectionKeys.forEach((key) => writeLocalCollection(key, data[key] as unknown[]));
+    // Profile and daily check-ins arrived in version 2 backups; older files simply leave them as they are.
+    if (Array.isArray(data.profile) && data.profile[0] && typeof data.profile[0] === 'object') writeLocalCollection('profile', [{ ...defaultProfile, ...(data.profile[0] as Partial<Profile>) }]);
+    if (Array.isArray(data.checkins)) writeLocalCollection('checkins', (data.checkins as unknown[]).filter((item) => isValidItem(item, ['date'])));
     loadData();
     return 'Backup restored.';
   };
 
   const deleteAllData = (): string => {
-    if (!window.confirm('Delete all people, plans, goals and reflections saved in this browser? This cannot be undone. Consider exporting a backup first.')) return '';
+    if (!window.confirm('Delete all people, plans, goals, reflections, check-ins and your profile saved in this browser? This cannot be undone. Consider exporting a backup first.')) return '';
     collectionKeys.forEach((key) => writeLocalCollection(key, []));
+    writeLocalCollection('checkins', []);
+    writeLocalCollection('profile', [{ ...defaultProfile, name: '' }]);
     loadData();
     return 'All your data has been deleted from this browser.';
   };
@@ -684,7 +756,7 @@ function App() {
   };
 
   const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
-  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, energy), [submittedQuestion, people, plans, goals, reflections, energy]);
+  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, day), [submittedQuestion, people, plans, goals, reflections, day]);
 
   // A new question or energy level clears any earlier Claude answer.
   latestQuestion.current = `${submittedQuestion}|${energy}`;
@@ -701,6 +773,7 @@ function App() {
     const body = {
       question: cut(submittedQuestion, 300),
       energy,
+      aboutYou: { social: day.social === 'company' ? 'up for company' : day.social === 'quiet' ? 'wants some quiet' : 'not said', freeTonight: day.freeTonight === null ? 'not said' : day.freeTonight ? 'yes' : 'not really', mood: cut(todayCheckIn?.mood ?? '', 30), recharge: day.recharge || 'not said', intention: cut(day.intention, 160), quietDay: day.quietToday },
       today: fmtDate(localDateKey()),
       instantAnswer: { headline: cut(decisionResult.verdict.headline, 120), reason: cut(decisionResult.verdict.reason, 500) },
       person: person ? { name: cut(person.name, 80), relationship: cut(person.relationship, 80), detail: cut(person.detail, 300), note: cut(person.note, 600) } : null,
@@ -746,21 +819,22 @@ function App() {
         <nav className="main-nav" aria-label="Main navigation">
           {navigation.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id || (page === 'person' && id === 'people') ? 'nav-item-active' : ''}`} onClick={() => navigate(id)}><Icon size={18} strokeWidth={page === id ? 2.3 : 1.8} /><span>{label}</span>{id === 'home' && <span className="nav-dot" />}</button>)}
         </nav>
-        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design.</span></div><button className="profile-chip" onClick={() => navigate('settings')} aria-label="Your name and data settings"><div className="profile-avatar">{initialsOf(profileName) || '·'}</div><div><strong>{profileName || 'Your space'}</strong><span>Personal space</span></div><ChevronRight size={15} className="profile-chevron" /></button></div>
+        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design.</span></div><button className="profile-chip" onClick={() => navigate('you')} aria-label="Your day and profile"><div className="profile-avatar">{initialsOf(profileName) || '·'}</div><div><strong>{profileName || 'Your space'}</strong><span>{todayCheckIn?.mood ? `Feeling ${todayCheckIn.mood}` : energy ? `Energy today: ${energy}` : 'Check in for today'}</span></div><ChevronRight size={15} className="profile-chevron" /></button></div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
       <main className="main-content">
-        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar" aria-hidden="true">{initialsOf(profileName) || '·'}</div></div></header>
+        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{page === 'you' ? 'You' : navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><button className="top-avatar" onClick={() => navigate('you')} aria-label="Your day and profile" title="Your day and profile">{initialsOf(profileName) || '·'}</button></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} deeper={deeperControls} energy={energy} setEnergy={setEnergy} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} deeper={deeperControls} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
           {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} />}
-          {page === 'settings' && <SettingsPage profileName={profileName} onSaveName={saveProfileName} aiEnabled={aiEnabled} onToggleAi={setDeeperAnswers} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
+          {page === 'you' && <YouPage profile={profile} onSaveProfile={saveProfile} todayCheckIn={todayCheckIn} onCheckIn={updateCheckIn} checkins={checkins} people={people} plans={plans} reflections={reflections} />}
+          {page === 'settings' && <SettingsPage aiEnabled={aiEnabled} onToggleAi={setDeeperAnswers} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
         </>}
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
@@ -790,7 +864,7 @@ function buildQuickQuestions(people: Person[], plans: Plan[], reflections: Refle
 type Moment = { kicker: string; title: string; text: string; action: { label: string; personId?: string; question?: string } };
 
 // The Home card picks the most timely thing from saved data, falling back to a gentle prompt.
-function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[]): Moment {
+function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[], quietToday = false): Moment {
   const first = (person: Person) => person.name.split(' ')[0];
   const soon = plans.filter(isUpcoming).sort(bySoonest).find((plan) => daysUntil(plan.plan_date) <= 1 && people.some((person) => person.id === plan.person_id));
   if (soon) {
@@ -802,6 +876,14 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[])
       title: `${soon.title} with ${first(person)}, ${when} at ${fmtTime(soon.plan_time)}.`,
       text: person.note ? `Your note: “${person.note}”` : feeling ? `Last time: ${lowerFirst(feeling.label)} — “${feeling.excerpt}”` : soon.context || 'A good moment to think about what you want from the time together.',
       action: { label: `Open ${first(person)}’s page`, personId: person.id },
+    };
+  }
+  if (quietToday) {
+    return {
+      kicker: 'A QUIET DAY',
+      title: 'Today is one of your quiet days.',
+      text: 'Nothing needs planning. Kinly will lean towards rest in its answers today.',
+      action: { label: 'Reflect for a minute' },
     };
   }
   const quiet = people
@@ -837,11 +919,11 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, energy, setEnergy, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; deeper: DeeperControls; energy: Energy; setEnergy: (value: Energy) => void; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; deeper: DeeperControls; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
-  const moment = useMemo(() => buildMoment(people, allPlans, reflections), [people, allPlans, reflections]);
+  const moment = useMemo(() => buildMoment(people, allPlans, reflections, quietToday), [people, allPlans, reflections, quietToday]);
   const runMoment = () => {
     if (moment.action.personId) onOpenPerson(moment.action.personId);
     else if (moment.action.question) { ask(moment.action.question); questionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
@@ -858,12 +940,18 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, e
     {decision && <DecisionPanel decision={decision} deeper={deeper} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} onOpenPerson={onOpenPerson} /><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
 }
 
 // A monthly read on the circle: who you saw, who feels good to be around, who may be drifting.
-function CircleInsights({ people, plans, reflections, onOpenPerson }: { people: Person[]; plans: Plan[]; reflections: Reflection[]; onOpenPerson: (id: string) => void }) {
+function CircleInsights({ people, plans, reflections, weeklyGoal, onOpenPerson, onOpenYou }: { people: Person[]; plans: Plan[]; reflections: Reflection[]; weeklyGoal: number; onOpenPerson: (id: string) => void; onOpenYou: () => void }) {
   const month = localDateKey().slice(0, 7);
+  // The week runs Monday to Sunday.
+  const weekStart = daysFromToday(-((new Date().getDay() + 6) % 7));
+  const weekEnd = daysFromToday(6 - ((new Date().getDay() + 6) % 7));
+  const thisWeek = plans.filter((plan) => plan.person_id && plan.plan_date >= weekStart && plan.plan_date <= weekEnd);
+  const seenThisWeek = new Set(thisWeek.filter((plan) => !isUpcoming(plan)).map((plan) => plan.person_id));
+  const plannedThisWeek = new Set(thisWeek.filter((plan) => isUpcoming(plan) && !seenThisWeek.has(plan.person_id)).map((plan) => plan.person_id));
   const monthName = new Date().toLocaleDateString('en-US', { month: 'long' });
   const entries = people.map((person) => ({ person, insight: personInsight(person, plans, reflections) }));
   const seen = entries.filter(({ insight }) => insight.past.some((plan) => plan.plan_date.startsWith(month)));
@@ -878,6 +966,9 @@ function CircleInsights({ people, plans, reflections, onOpenPerson }: { people: 
   if (!people.length) return null;
   return <section className="content-card circle-insights">
     <div className="card-header"><div><span className="card-kicker">YOUR CIRCLE IN {monthName.toUpperCase()}</span><h2>How your connections are going</h2></div></div>
+    {weeklyGoal > 0
+      ? <div className="week-goal"><div className="week-goal-text"><span className="insight-label">This week’s goal</span><span><b>{seenThisWeek.size}</b> seen{plannedThisWeek.size ? <> · <b>{plannedThisWeek.size}</b> planned</> : null} of {weeklyGoal} {weeklyGoal === 1 ? 'person' : 'people'}</span></div><div className="week-goal-bar" aria-hidden="true"><i className="week-goal-seen" style={{ width: `${Math.min(seenThisWeek.size / weeklyGoal, 1) * 100}%` }} /><i className="week-goal-planned" style={{ width: `${Math.min(plannedThisWeek.size / weeklyGoal, Math.max(0, 1 - seenThisWeek.size / weeklyGoal)) * 100}%` }} /></div></div>
+      : <button className="deeper-invite week-goal-invite" onClick={onOpenYou}><Target size={14} /> Set a weekly connection goal</button>}
     <div className="insight-grid">
       <div className="insight-col"><span className="insight-label">Time together this month</span><strong className="insight-number">{seen.length}<small> of {people.length} people</small></strong><div className="insight-people">{seen.length ? seen.map(({ person }) => chip(person)) : <p className="insight-empty">No plans with anyone yet this month.</p>}</div></div>
       <div className="insight-col"><span className="insight-label">Feels good with</span><div className="insight-people">{feelsGood.length ? feelsGood.map(({ person }) => chip(person)) : <p className="insight-empty">Write a reflection after time together to see who leaves you feeling good.</p>}</div></div>
@@ -982,7 +1073,97 @@ function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyeb
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
-function SettingsPage({ profileName, onSaveName, aiEnabled, onToggleAi, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { profileName: string; onSaveName: (name: string) => string; aiEnabled: boolean; onToggleAi: (on: boolean) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
+const energyScore = { low: 0, okay: 1, good: 2 } as const;
+const dayDiff = (from: string, to: string) => Math.round((new Date(`${to}T12:00:00`).getTime() - new Date(`${from}T12:00:00`).getTime()) / 86400000);
+
+// Gentle patterns from daily check-ins and reflections. Each needs enough data before it says anything.
+function findPatterns(checkins: CheckIn[], people: Person[], plans: Plan[], reflections: Reflection[]): string[] {
+  const patterns: string[] = [];
+  const rated = checkins.filter((checkin): checkin is CheckIn & { energy: NonNullable<Energy> } => checkin.energy !== null);
+  const busy: number[] = [];
+  const calm: number[] = [];
+  rated.forEach((checkin) => {
+    const priorWeek = plans.filter((plan) => plan.person_id && dayDiff(plan.plan_date, checkin.date) >= 1 && dayDiff(plan.plan_date, checkin.date) <= 7).length;
+    (priorWeek >= 3 ? busy : calm).push(energyScore[checkin.energy]);
+  });
+  const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (busy.length >= 3 && calm.length >= 3) {
+    const gap = average(calm) - average(busy);
+    if (gap >= 0.5) patterns.push('Your energy tends to dip after weeks with three or more plans.');
+    if (gap <= -0.5) patterns.push('Busier weeks seem to lift your energy.');
+  }
+  const quietDays = rated.filter((checkin) => checkin.social === 'quiet').length;
+  if (rated.length >= 7 && quietDays / rated.length >= 0.5) patterns.push('You’ve wanted quiet on most days lately — it may be worth protecting a free evening.');
+  people.forEach((person) => {
+    const tones = personInsight(person, plans, reflections).reflections.map((reflection) => feelingOf(reflection).tone);
+    const first = person.name.split(' ')[0];
+    if (tones.length >= 2 && tones.filter((tone) => tone === 'positive').length / tones.length >= 0.66) patterns.push(`Time with ${first} usually leaves you feeling good.`);
+    if (tones.length >= 2 && tones.filter((tone) => tone === 'negative').length / tones.length >= 0.66) patterns.push(`Time with ${first} has often felt draining — shorter plans may help.`);
+  });
+  return patterns.slice(0, 4);
+}
+
+function ChoiceRow<T extends string | number | boolean>({ label, options, value, onChange }: { label: string; options: { value: T; label: string }[]; value: T | null; onChange: (value: T | null) => void }) {
+  return <div className="choice-row" role="group" aria-label={label}><span className="choice-label">{label}</span><div className="choice-options">{options.map((option) => <button type="button" key={String(option.value)} className={`energy-option ${value === option.value ? 'energy-active' : ''}`} aria-pressed={value === option.value} onClick={() => onChange(value === option.value ? null : option.value)}>{option.label}</button>)}</div></div>;
+}
+
+function DayToggles({ label, value, onChange }: { label: string; value: number[]; onChange: (days: number[]) => void }) {
+  return <div className="choice-row" role="group" aria-label={label}><span className="choice-label">{label}</span><div className="choice-options">{weekdayOrder.map((weekday) => <button type="button" key={weekday} className={`day-toggle ${value.includes(weekday) ? 'energy-active' : ''}`} aria-pressed={value.includes(weekday)} aria-label={weekdayNames[weekday]} onClick={() => onChange(value.includes(weekday) ? value.filter((item) => item !== weekday) : [...value, weekday])}>{weekdayNames[weekday].slice(0, 3)}</button>)}</div></div>;
+}
+
+function YouPage({ profile, onSaveProfile, todayCheckIn, onCheckIn, checkins, people, plans, reflections }: { profile: Profile; onSaveProfile: (patch: Partial<Profile>) => void; todayCheckIn?: CheckIn; onCheckIn: (patch: Partial<CheckIn>) => void; checkins: CheckIn[]; people: Person[]; plans: Plan[]; reflections: Reflection[] }) {
+  const [about, setAbout] = useState({ name: profile.name, pronouns: profile.pronouns, intention: profile.intention });
+  const [saved, setSaved] = useState('');
+  const [mood, setMood] = useState(todayCheckIn?.mood ?? '');
+  const saveMood = () => { if (mood.trim() !== (todayCheckIn?.mood ?? '')) onCheckIn({ mood: mood.trim() }); };
+  const first = profile.name.split(' ')[0];
+  const strip = Array.from({ length: 14 }, (_, index) => {
+    const date = daysFromToday(index - 13);
+    return { date, energy: checkins.find((checkin) => checkin.date === date)?.energy ?? null };
+  });
+  const patterns = findPatterns(checkins, people, plans, reflections);
+  const checkedInDays = checkins.filter((checkin) => checkin.energy).length;
+  const saveAbout = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSaveProfile({ name: about.name.trim(), pronouns: about.pronouns.trim(), intention: about.intention.trim() });
+    setSaved('Saved.');
+  };
+  return <div className="page-wrap you-page">
+    <section className="page-heading-row"><div><p className="eyebrow">YOU</p><h1>{first ? `Hi, ${first}.` : 'Your space'}</h1><p className="intro">A few things that help Kinly answer like a friend who knows you. It all stays in this browser.</p></div></section>
+
+    <section className="content-card you-today"><div className="card-header"><div><span className="card-kicker">TODAY · {fmtDate(localDateKey()).toUpperCase()}</span><h2>How are you arriving today?</h2></div></div>
+      <ChoiceRow label="Energy" value={todayCheckIn?.energy ?? null} onChange={(value) => onCheckIn({ energy: value })} options={energyLevels} />
+      <ChoiceRow label="Social appetite" value={todayCheckIn?.social ?? null} onChange={(value) => onCheckIn({ social: value })} options={[{ value: 'company' as const, label: 'Up for company' }, { value: 'quiet' as const, label: 'Want some quiet' }]} />
+      <ChoiceRow label="Free tonight?" value={todayCheckIn?.freeTonight ?? null} onChange={(value) => onCheckIn({ freeTonight: value })} options={[{ value: true, label: 'Yes' }, { value: false, label: 'Not really' }]} />
+      <div className="choice-row"><label className="choice-label" htmlFor="today-mood">One word for today</label><input id="today-mood" className="you-input mood-input" value={mood} maxLength={24} placeholder="calm, stretched, hopeful…" onChange={(event) => setMood(event.target.value)} onBlur={saveMood} onKeyDown={(event) => { if (event.key === 'Enter') saveMood(); }} /></div>
+      <p className="you-note">Resets tomorrow. Today’s answers use it automatically.</p>
+    </section>
+
+    <section className="content-card you-patterns"><div className="card-header"><div><span className="card-kicker">YOUR LAST 14 DAYS</span><h2>Energy and patterns</h2></div></div>
+      <div className="energy-strip" aria-label="Energy over the last 14 days">{strip.map((cell) => <div key={cell.date} className={`strip-cell strip-${cell.energy ?? 'none'}`} title={`${fmtDate(cell.date)}: ${cell.energy ?? 'no check-in'}`}><span>{weekdayNames[new Date(`${cell.date}T12:00:00`).getDay()].slice(0, 1)}</span></div>)}</div>
+      <div className="strip-legend"><span><i className="strip-cell strip-low" /> Low</span><span><i className="strip-cell strip-okay" /> Okay</span><span><i className="strip-cell strip-good" /> Good</span></div>
+      {patterns.length ? <ul className="pattern-list">{patterns.map((pattern) => <li key={pattern}><Sparkles size={13} />{pattern}</li>)}</ul> : <p className="insight-empty">{checkedInDays < 6 ? `Check in for a few more days (${checkedInDays} so far) and patterns will start to appear here.` : 'No clear patterns yet. Keep checking in and writing reflections.'}</p>}
+    </section>
+
+    <section className="content-card you-about"><div className="card-header"><div><span className="card-kicker">ABOUT YOU</span><h2>What Kinly should know</h2></div></div>
+      <form onSubmit={saveAbout} className="you-form">
+        <div className="you-fields"><label>Name<input className="you-input" value={about.name} maxLength={40} onChange={(event) => { setAbout({ ...about, name: event.target.value }); setSaved(''); }} placeholder="What should Kinly call you?" /></label><label>Pronouns<span className="label-optional">Optional</span><input className="you-input" value={about.pronouns} maxLength={24} onChange={(event) => { setAbout({ ...about, pronouns: event.target.value }); setSaved(''); }} placeholder="they/them" /></label></div>
+        <label>A personal intention<span className="label-optional">Optional</span><input className="you-input" value={about.intention} maxLength={120} onChange={(event) => { setAbout({ ...about, intention: event.target.value }); setSaved(''); }} placeholder="See family more this month" /></label>
+        <div className="you-form-actions"><button type="submit" className="primary-button"><Check size={16} /> Save</button>{saved && <span className="settings-status">{saved}</span>}</div>
+      </form>
+      <ChoiceRow label="What recharges you" value={profile.recharge || null} onChange={(value) => onSaveProfile({ recharge: value ?? '' })} options={[{ value: 'alone' as const, label: 'Time alone' }, { value: 'one-on-one' as const, label: 'One-on-one' }, { value: 'small-group' as const, label: 'Small groups' }]} />
+      <DayToggles label="Usual free evenings" value={profile.freeEvenings} onChange={(days) => onSaveProfile({ freeEvenings: days })} />
+    </section>
+
+    <section className="content-card you-rhythm"><div className="card-header"><div><span className="card-kicker">YOUR RHYTHM</span><h2>Connection goal and quiet days</h2></div></div>
+      <ChoiceRow label="See this many people a week" value={profile.weeklyGoal || null} onChange={(value) => onSaveProfile({ weeklyGoal: value ?? 0 })} options={[1, 2, 3, 4, 5].map((count) => ({ value: count, label: String(count) }))} />
+      <DayToggles label="Quiet days — no new plan suggestions" value={profile.quietDays} onChange={(days) => onSaveProfile({ quietDays: days })} />
+      <p className="you-note">Your weekly progress shows on Home. On quiet days, Kinly leans towards rest.</p>
+    </section>
+  </div>;
+}
+
+function SettingsPage({ aiEnabled, onToggleAi, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { aiEnabled: boolean; onToggleAi: (on: boolean) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
   const [status, setStatus] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -994,7 +1175,6 @@ function SettingsPage({ profileName, onSaveName, aiEnabled, onToggleAi, counts, 
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
     <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on Deeper answers below and ask for one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
-    <section className="content-card settings-name"><div><span className="card-kicker">YOU</span><h2>Your name</h2><p>Shown in the sidebar. Like everything else, it stays in this browser.</p></div><form onSubmit={(event) => { event.preventDefault(); setStatus(onSaveName(String(new FormData(event.currentTarget).get('profile_name') || ''))); }}><input name="profile_name" defaultValue={profileName} placeholder="What should Kinly call you?" aria-label="Your name" maxLength={40} /><button type="submit" className="quiet-button">Save name</button></form></section>
     <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">OPTIONAL · CLAUDE AI</span><h2>Deeper answers</h2><p>When this is on, a “Deeper answer” button appears under Kinly’s instant answers. Tapping it sends that one question — with the notes, plans and reflections about the person involved — to Anthropic’s Claude AI to write a fuller, more personal reply. Nothing is sent unless you tap the button, and nothing is stored by Kinly.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>

@@ -16,6 +16,7 @@ const text = (max: number) => z.string().max(max);
 const Input = z.object({
   question: z.string().min(1).max(300),
   energy: z.enum(['low', 'okay', 'good']).nullable(),
+  aboutYou: z.object({ social: text(30), freeTonight: text(20), mood: text(30), recharge: text(30), intention: text(160), quietDay: z.boolean() }).nullable().optional(),
   today: text(60),
   instantAnswer: z.object({ headline: text(120), reason: text(500) }).nullable(),
   person: z.object({ name: text(80), relationship: text(80), detail: text(300), note: text(600) }).nullable(),
@@ -40,6 +41,8 @@ Answer with:
 - headline: a few words, such as "Yes — go for it", "Not tonight" or "Lead with listening".
 - reason: one or two sentences grounded in what they saved. Name the specific note, plan or feeling you relied on.
 - points: up to four short, concrete suggestions, such as a talking point, a gentler alternative, or something to notice. Use an empty list when nothing would add value.
+
+"aboutYou" is how they checked in today and what they told Kinly about themselves; weigh it alongside the notes, especially their energy and whether they want company.
 
 When the saved context is thin, say so plainly instead of guessing, and never invent events, feelings or facts. The instant answer comes from Kinly's simple rules; agree or disagree with it, and say why if you disagree. You are a thoughtful friend, not a therapist: if anything suggests someone may be unsafe or in crisis, gently suggest reaching out to someone they trust or a local helpline.
 
