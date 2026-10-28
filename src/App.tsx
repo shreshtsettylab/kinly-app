@@ -40,6 +40,9 @@ type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reaso
 type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
 type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling };
 type Energy = 'low' | 'okay' | 'good' | null;
+type DeeperAnswer = { verdict: Verdict['tone']; headline: string; reason: string; points: string[] };
+type DeeperState = { status: 'idle' | 'loading' | 'done' | 'error'; answer?: DeeperAnswer; error?: string };
+type DeeperControls = { enabled: boolean; state: DeeperState; onRequest: () => void; onEnable: () => void };
 type DecisionResult = {
   kind: 'decide' | 'recall' | 'when' | 'cancel' | 'talk' | 'who';
   verdict: Verdict;
@@ -477,6 +480,9 @@ function App() {
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
   const [energy, setEnergy] = useState<Energy>(null);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [deeper, setDeeper] = useState<DeeperState>({ status: 'idle' });
+  const latestQuestion = useRef('');
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -501,6 +507,7 @@ function App() {
     ];
     setReflections(readLocalCollection<Reflection>('reflections', seedReflections));
     setProfileName(readLocalCollection<{ name: string }>('profile', [{ name: 'Jordan Lee' }])[0]?.name || '');
+    setAiEnabled(readLocalCollection<{ deeperAnswers: boolean }>('settings', [{ deeperAnswers: false }])[0]?.deeperAnswers === true);
     setLoading(false);
   };
 
@@ -624,6 +631,12 @@ function App() {
     loadData();
   };
 
+  const setDeeperAnswers = (on: boolean): string => {
+    writeLocalCollection('settings', [{ deeperAnswers: on }]);
+    setAiEnabled(on);
+    return on ? 'Deeper answers are on. Nothing is sent until you tap “Deeper answer”.' : 'Deeper answers are off. Nothing will be sent to Claude.';
+  };
+
   const saveProfileName = (name: string): string => {
     writeLocalCollection('profile', [{ name: name.trim() }]);
     setProfileName(name.trim());
@@ -673,6 +686,43 @@ function App() {
   const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
   const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, energy), [submittedQuestion, people, plans, goals, reflections, energy]);
 
+  // A new question or energy level clears any earlier Claude answer.
+  latestQuestion.current = `${submittedQuestion}|${energy}`;
+  useEffect(() => { setDeeper({ status: 'idle' }); }, [submittedQuestion, energy]);
+
+  // Sends only this question and the saved context it relates to, and only when asked.
+  const requestDeeper = async () => {
+    if (!decisionResult) return;
+    const asked = latestQuestion.current;
+    const cut = (value: string, max: number) => value.slice(0, max);
+    const person = decisionResult.kind === 'who' ? undefined : decisionResult.matchedPeople[0] ?? people.find((item) => item.id === decisionResult.matchedPlans[0]?.person_id);
+    const insight = person ? personInsight(person, plans, reflections) : null;
+    const planItem = (plan: Plan) => ({ title: cut(plan.title, 120), when: `${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)} (${relativeDay(plan.plan_date)})`, category: cut(plan.category, 30), context: cut(plan.context, 400), upcoming: isUpcoming(plan) });
+    const body = {
+      question: cut(submittedQuestion, 300),
+      energy,
+      today: fmtDate(localDateKey()),
+      instantAnswer: { headline: cut(decisionResult.verdict.headline, 120), reason: cut(decisionResult.verdict.reason, 500) },
+      person: person ? { name: cut(person.name, 80), relationship: cut(person.relationship, 80), detail: cut(person.detail, 300), note: cut(person.note, 600) } : null,
+      plans: insight ? [...insight.upcoming.slice(0, 5), ...insight.past.slice(0, 5)].map(planItem) : decisionResult.matchedPlans.slice(0, 5).map(planItem),
+      reflections: insight ? insight.reflections.slice(0, 5).map((reflection) => ({ date: reflectionDate(reflection), text: cut(reflection.text, 1200) })) : [],
+      circle: decisionResult.kind === 'who' ? people.slice(0, 12).map((item) => {
+        const itemInsight = personInsight(item, plans, reflections);
+        return { name: cut(item.name, 80), last: itemInsight.last ? cut(`${itemInsight.last.title}, ${relativeDay(itemInsight.last.plan_date)}`, 100) : 'none saved', next: itemInsight.next ? cut(`${itemInsight.next.title}, ${relativeDay(itemInsight.next.plan_date)}`, 100) : 'none planned', feeling: itemInsight.feeling?.label || 'no reflections' };
+      }) : [],
+    };
+    setDeeper({ status: 'loading' });
+    try {
+      const response = await fetch('/api/deeper', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.answer) throw new Error(data.error || 'Deeper answers are not available right now.');
+      if (latestQuestion.current === asked) setDeeper({ status: 'done', answer: data.answer });
+    } catch (failure) {
+      if (latestQuestion.current === asked) setDeeper({ status: 'error', error: failure instanceof Error ? failure.message : 'Something went wrong. Try again.' });
+    }
+  };
+  const deeperControls: DeeperControls = { enabled: aiEnabled, state: deeper, onRequest: requestDeeper, onEnable: () => navigate('settings') };
+
   const openModal = (type: Modal, id: string | null = null) => { setModal(type); setEditingId(id); setError(''); setPresetPersonId(null); };
   const openPlanFor = (id: string) => { openModal('plan'); setPresetPersonId(id); };
   const openPerson = (id: string) => { setPersonId(id); navigate('person'); };
@@ -703,14 +753,14 @@ function App() {
         <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar" aria-hidden="true">{initialsOf(profileName) || '·'}</div></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} energy={energy} setEnergy={setEnergy} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} deeper={deeperControls} energy={energy} setEnergy={setEnergy} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
           {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} />}
-          {page === 'settings' && <SettingsPage profileName={profileName} onSaveName={saveProfileName} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
+          {page === 'settings' && <SettingsPage profileName={profileName} onSaveName={saveProfileName} aiEnabled={aiEnabled} onToggleAi={setDeeperAnswers} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
         </>}
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
@@ -787,7 +837,7 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, energy, setEnergy, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; energy: Energy; setEnergy: (value: Energy) => void; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, energy, setEnergy, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; deeper: DeeperControls; energy: Energy; setEnergy: (value: Energy) => void; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
@@ -805,7 +855,7 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, energy, s
     {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
     <div className="energy-row" role="group" aria-label="Your energy right now"><span className="ask-label">Your energy right now</span>{energyLevels.map((level) => <button type="button" key={level.value} className={`energy-option ${energy === level.value ? 'energy-active' : ''}`} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div>
     <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
-    {decision && <DecisionPanel decision={decision} onClear={() => setQuestion('')} />}
+    {decision && <DecisionPanel decision={decision} deeper={deeper} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} onOpenPerson={onOpenPerson} /><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
@@ -873,7 +923,16 @@ function GoalsPage({ goals, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]
 
 function EmptyInline({ text, action, onClick }: { text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span>{text}</span><button className="card-link" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
-function DecisionPanel({ decision, onClear }: { decision: NonNullable<DecisionResult>; onClear: () => void }) {
+function DeeperSection({ enabled, state, onRequest, onEnable }: DeeperControls) {
+  if (!enabled) return <button className="deeper-invite" onClick={onEnable}><Sparkles size={14} /> Want a fuller answer? Turn on Claude AI in Settings</button>;
+  if (state.status === 'done' && state.answer) {
+    const { verdict, headline, reason, points } = state.answer;
+    return <div className={`deeper-answer deeper-${verdict}`}><span className="card-kicker"><Sparkles size={12} /> DEEPER ANSWER — CLAUDE AI</span><h4>{headline}</h4><p>{reason}</p>{points.length > 0 && <ul>{points.slice(0, 4).map((point) => <li key={point}>{point}</li>)}</ul>}<small>Written by Claude from the notes above. It can be wrong — trust your own sense of things.</small></div>;
+  }
+  return <div className="deeper-request"><button className="deeper-button" onClick={onRequest} disabled={state.status === 'loading'}><Sparkles size={15} /> {state.status === 'loading' ? 'Thinking it through…' : 'Deeper answer with Claude'}</button><span className={state.status === 'error' ? 'deeper-error' : ''} role={state.status === 'error' ? 'alert' : undefined}>{state.status === 'error' ? state.error : 'Sends this question and the related notes to Claude AI.'}</span></div>;
+}
+
+function DecisionPanel({ decision, deeper, onClear }: { decision: NonNullable<DecisionResult>; deeper: DeeperControls; onClear: () => void }) {
   const { verdict } = decision;
   const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER' }[decision.kind];
   // Recall questions are answered by the saved memories themselves, so show them up front.
@@ -884,6 +943,7 @@ function DecisionPanel({ decision, onClear }: { decision: NonNullable<DecisionRe
     <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
     {decision.glance.length > 0 && <dl className="decision-glance">{decision.glance.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
+    <DeeperSection {...deeper} />
     {memoriesFirst && memories}
     {hasDetails && <details className="decision-details"><summary>See the full reasoning <ChevronRight size={14} /></summary>
       {decision.summary && <p className="decision-summary">{decision.summary}</p>}
@@ -922,7 +982,7 @@ function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyeb
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
-function SettingsPage({ profileName, onSaveName, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { profileName: string; onSaveName: (name: string) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
+function SettingsPage({ profileName, onSaveName, aiEnabled, onToggleAi, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { profileName: string; onSaveName: (name: string) => string; aiEnabled: boolean; onToggleAi: (on: boolean) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
   const [status, setStatus] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -933,8 +993,9 @@ function SettingsPage({ profileName, onSaveName, counts, onExport, onImport, onD
   };
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
-    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on Deeper answers below and ask for one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
     <section className="content-card settings-name"><div><span className="card-kicker">YOU</span><h2>Your name</h2><p>Shown in the sidebar. Like everything else, it stays in this browser.</p></div><form onSubmit={(event) => { event.preventDefault(); setStatus(onSaveName(String(new FormData(event.currentTarget).get('profile_name') || ''))); }}><input name="profile_name" defaultValue={profileName} placeholder="What should Kinly call you?" aria-label="Your name" maxLength={40} /><button type="submit" className="quiet-button">Save name</button></form></section>
+    <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">OPTIONAL · CLAUDE AI</span><h2>Deeper answers</h2><p>When this is on, a “Deeper answer” button appears under Kinly’s instant answers. Tapping it sends that one question — with the notes, plans and reflections about the person involved — to Anthropic’s Claude AI to write a fuller, more personal reply. Nothing is sent unless you tap the button, and nothing is stored by Kinly.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>
       <section className="content-card settings-card"><span className="card-kicker">RESTORE</span><h2>Import a backup</h2><p>Load a backup file you exported earlier. It replaces what is saved in this browser now.</p><div className="settings-actions"><button className="quiet-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Import backup</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={choseFile} /></div></section>
