@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import {
   ArrowUpRight,
-  Bell,
   BookOpen,
   CalendarDays,
   Check,
@@ -54,33 +53,61 @@ function fmtDate(dateStr: string): string {
   return new Date(`${dateStr}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
+const pad = (value: number) => String(value).padStart(2, '0');
+
+// Dates are compared in the user's own time zone, not UTC.
+function localDateKey(date = new Date()): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function daysFromToday(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return localDateKey(date);
+}
+
+function planMoment(plan: Plan): string {
+  return `${plan.plan_date}T${plan.plan_time.slice(0, 5)}`;
+}
+
+function isUpcoming(plan: Plan): boolean {
+  const now = new Date();
+  return planMoment(plan) >= `${localDateKey(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+const bySoonest = (a: Plan, b: Plan) => planMoment(a).localeCompare(planMoment(b));
+
+// Everyday words that would otherwise match almost any saved note.
+const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'about', 'that', 'this', 'what', 'when', 'where', 'which', 'who', 'why', 'how', 'did', 'does', 'should', 'would', 'could', 'can', 'will', 'was', 'were', 'are', 'have', 'has', 'had', 'last', 'next', 'tonight', 'today', 'tomorrow', 'into', 'them', 'they', 'their', 'her', 'his', 'him', 'she', 'you', 'your', 'our', 'not', 'but', 'any', 'some', 'just', 'feel', 'think', 'want', 'need', 'get']);
+
+const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) || [];
+
 function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[]): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
-  const tokens = q.split(/\s+/).filter((t) => t.length > 1);
-  const now = new Date().toISOString().slice(0, 10);
-
-  const personMatches = (person: Person) => {
-    const haystack = `${person.name} ${person.relationship} ${person.detail} ${person.note}`.toLowerCase();
-    return q.includes(person.name.toLowerCase()) || tokens.some((token) => haystack.includes(token));
+  const questionWords = new Set(wordsOf(q));
+  const tokens = [...questionWords].filter((word) => word.length > 2 && !stopWords.has(word));
+  const mentions = (text: string) => {
+    const words = new Set(wordsOf(text));
+    return tokens.some((token) => words.has(token));
   };
-  const matchedPeople = people.filter(personMatches);
+
+  // People named in the question come first; people matched only by their notes follow.
+  const isNamed = (person: Person) => q.includes(person.name.toLowerCase()) || wordsOf(person.name).some((part) => part.length > 1 && questionWords.has(part));
+  const namedPeople = people.filter(isNamed);
+  const matchedPeople = [...namedPeople, ...people.filter((person) => !isNamed(person) && mentions(`${person.relationship} ${person.detail} ${person.note}`))];
   const planMatches = (plan: Plan) => {
     const linked = people.find((person) => person.id === plan.person_id);
-    const haystack = `${plan.title} ${plan.category} ${plan.context} ${linked?.name || ''}`.toLowerCase();
-    return q.includes(plan.title.toLowerCase()) || tokens.some((token) => haystack.includes(token));
+    return q.includes(plan.title.toLowerCase()) || mentions(`${plan.title} ${plan.category} ${plan.context} ${linked?.name || ''}`);
   };
   const matchedPlans = plans.filter(planMatches);
-  const matchedGoals = goals.filter((goal) => {
-    const haystack = `${goal.title} ${goal.category} ${goal.description}`.toLowerCase();
-    return tokens.some((token) => haystack.includes(token));
-  });
+  const matchedGoals = goals.filter((goal) => mentions(`${goal.title} ${goal.category} ${goal.description}`));
 
-  const upcoming = plans.filter((plan) => plan.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date));
+  const upcoming = plans.filter(isUpcoming).sort(bySoonest);
   const person = matchedPeople[0];
   const personName = person?.name;
-  const personPlans = person ? plans.filter((plan) => plan.person_id === person.id && plan.plan_date >= now).sort((a, b) => a.plan_date.localeCompare(b.plan_date)) : [];
-  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && plan.plan_date < now) : [];
+  const personPlans = person ? upcoming.filter((plan) => plan.person_id === person.id) : [];
+  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)) : [];
   const activeGoals = goals.filter((goal) => goal.status === 'active');
   const scheduleCount = upcoming.length;
 
@@ -288,6 +315,10 @@ const navigation: { id: Page; label: string; icon: typeof Home }[] = [
 
 const categories = ['Social', 'Work', 'Family', 'Learning', 'Wellbeing', 'Rest', 'Personal'];
 const goalCategories = ['Work', 'Learning', 'Relationships', 'Wellbeing', 'Rest'];
+const maxActiveGoals = 3;
+const goalLimitMessage = 'You can keep up to three active monthly goals. Complete or remove one first.';
+const countActive = (goals: { status: string }[]) => goals.filter((goal) => goal.status === 'active').length;
+const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 function Avatar({ person, size = 'md' }: { person: Person; size?: 'sm' | 'md' | 'lg' }) {
   return <div className={`avatar avatar-${size}`} style={{ backgroundColor: person.color }} aria-label={person.name}>{person.initials}</div>;
@@ -313,9 +344,9 @@ function App() {
     setError('');
     const loadedPeople = readLocalCollection<Person>('people', seedPeople);
     const seedPlans: Plan[] = [
-      { id: 'dinner-at-lupa', title: 'Dinner at Lupa', plan_date: '2026-10-16', plan_time: '19:00', person_id: loadedPeople.find((person) => person.name === 'Maya Chen')?.id || null, category: 'Social', context: 'A chance to catch up without rushing.' },
-      { id: 'prospect-park-walk', title: 'Walk in Prospect Park', plan_date: '2026-10-17', plan_time: '10:30', person_id: loadedPeople.find((person) => person.name === 'Arjun Mehta')?.id || null, category: 'Wellbeing', context: 'Keep the morning unhurried.' },
-      { id: 'project-catch-up', title: 'Project catch-up', plan_date: '2026-10-19', plan_time: '14:00', person_id: loadedPeople.find((person) => person.name === 'Elena Rossi')?.id || null, category: 'Work', context: 'Bring the first draft.' },
+      { id: 'dinner-at-lupa', title: 'Dinner at Lupa', plan_date: daysFromToday(1), plan_time: '19:00', person_id: loadedPeople.find((person) => person.name === 'Maya Chen')?.id || null, category: 'Social', context: 'A chance to catch up without rushing.' },
+      { id: 'prospect-park-walk', title: 'Walk in Prospect Park', plan_date: daysFromToday(3), plan_time: '10:30', person_id: loadedPeople.find((person) => person.name === 'Arjun Mehta')?.id || null, category: 'Wellbeing', context: 'Keep the morning unhurried.' },
+      { id: 'project-catch-up', title: 'Project catch-up', plan_date: daysFromToday(5), plan_time: '14:00', person_id: loadedPeople.find((person) => person.name === 'Elena Rossi')?.id || null, category: 'Work', context: 'Bring the first draft.' },
     ];
     setPeople(loadedPeople);
     setPlans(readLocalCollection<Plan>('plans', seedPlans));
@@ -332,8 +363,26 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const questionRef = useRef<HTMLInputElement>(null);
+  const focusQuestion = () => {
+    setPage('home');
+    setMobileOpen(false);
+    requestAnimationFrame(() => questionRef.current?.focus());
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !modal) {
+        event.preventDefault();
+        focusQuestion();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [modal]);
+
   const filteredPeople = useMemo(() => people.filter((person) => `${person.name} ${person.relationship}`.toLowerCase().includes(search.toLowerCase())), [people, search]);
-  const upcomingPlans = useMemo(() => plans.filter((plan) => `${plan.plan_date}T${plan.plan_time}` >= new Date().toISOString().slice(0, 16)), [plans]);
+  const upcomingPlans = useMemo(() => plans.filter(isUpcoming).sort(bySoonest), [plans]);
   const activeGoals = goals.filter((goal) => goal.status === 'active');
 
   const savePerson = async (event: FormEvent<HTMLFormElement>) => {
@@ -384,11 +433,11 @@ function App() {
     const form = new FormData(event.currentTarget);
     const title = String(form.get('title') || '').trim();
     if (!title) return;
-    if (!editingId && activeGoals.length >= 3) { setError('You can keep up to three active monthly goals.'); return; }
     const values = { title, description: String(form.get('description') || '').trim(), category: String(form.get('category') || 'Relationships'), status: String(form.get('status') || 'active') as 'active' | 'completed' };
     const nextGoals = editingId
       ? goals.map((goal) => goal.id === editingId ? { ...goal, ...values } : goal)
-      : [...goals, { ...values, id: createLocalId(), month_start: new Date().toISOString().slice(0, 10) }];
+      : [...goals, { ...values, id: createLocalId(), month_start: `${localDateKey().slice(0, 7)}-01` }];
+    if (countActive(nextGoals) > maxActiveGoals) { setError(goalLimitMessage); return; }
     writeLocalCollection('goals', nextGoals);
     setModal(null); setEditingId(null); loadData();
   };
@@ -401,6 +450,7 @@ function App() {
 
   const toggleGoal = async (goal: Goal) => {
     const nextGoals = goals.map((item) => item.id === goal.id ? { ...item, status: goal.status === 'active' ? 'completed' : 'active' } : item);
+    if (countActive(nextGoals) > maxActiveGoals) { setError(goalLimitMessage); return; }
     writeLocalCollection('goals', nextGoals);
     loadData();
   };
@@ -442,10 +492,10 @@ function App() {
       </aside>
       {mobileOpen && <button className="mobile-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
       <main className="main-content">
-        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} /><strong>{navigation.find((item) => item.id === page)?.label}</strong></div><div className="topbar-actions"><button className="icon-button" aria-label="Search"><Search size={18} /></button><button className="icon-button notification-button" aria-label="Notifications"><Bell size={18} /><span /></button><div className="top-avatar">JL</div></div></header>
-        {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
+        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} /><strong>{navigation.find((item) => item.id === page)?.label}</strong></div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar">JL</div></div></header>
+        {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} people={people} plans={upcomingPlans} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} onAddPerson={() => openModal('person')} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
@@ -455,14 +505,15 @@ function App() {
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
       {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} people={people} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePlan} />}
-      {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={saveGoal} />}
+      {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
   );
 }
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate, people, plans, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; navigate: (page: Page) => void; people: Person[]; plans: Plan[]; goals: Goal[] }) {
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate, onAddPerson, onAddPlan, questionRef, people, plans, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; navigate: (page: Page) => void; onAddPerson: () => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; goals: Goal[] }) {
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onSubmitQuestion(); };
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">THURSDAY, OCTOBER 15</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={() => navigate('people')}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">A MOMENT TO CONSIDER</span><h2>What would feel nourishing today?</h2><p>You have some open space this evening. Notice what your energy is asking for before you fill it.</p></div><button className="text-button" onClick={() => navigate('reflections')}>Reflect for a minute <ArrowUpRight size={15} /></button></section><section className="ask-section"><div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div><form className="question-box" onSubmit={submit}><Search size={19} /><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about a person or plan…" aria-label="Ask about a person or plan" /><kbd><Command size={12} /> K</kbd></form><div className="prompt-list">{prompts.map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => { setQuestion(prompt); onSubmitQuestion(prompt); }}>{prompt}<ArrowUpRight size={14} /></button>)}</div>{decision && <DecisionPanel decision={decision} />}</section><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={() => navigate('plans')} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => navigate('people')}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={() => navigate('people')}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">A MOMENT TO CONSIDER</span><h2>What would feel nourishing today?</h2><p>You have some open space this evening. Notice what your energy is asking for before you fill it.</p></div><button className="text-button" onClick={() => navigate('reflections')}>Reflect for a minute <ArrowUpRight size={15} /></button></section><section className="ask-section"><div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div><form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about a person or plan…" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd></form><div className="prompt-list">{prompts.map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => { setQuestion(prompt); onSubmitQuestion(prompt); }}>{prompt}<ArrowUpRight size={14} /></button>)}</div>{decision && <DecisionPanel decision={decision} />}</section><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => navigate('people')}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
 }
 
 function SummaryStat({ label, value, icon, onClick }: { label: string; value: number; icon: React.ReactNode; onClick: () => void }) { return <button className="summary-stat" onClick={onClick}><span className="summary-stat-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span><ArrowUpRight size={14} /></button>; }
@@ -471,7 +522,7 @@ function PlanRow({ plan, person }: { plan: Plan; person?: Person }) { return <di
 
 function PeoplePage({ search, setSearch, people, onAdd, onEdit, onDelete }: { search: string; setSearch: (value: string) => void; people: Person[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { return <div className="page-wrap people-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR CIRCLE</p><h1>People</h1><p className="intro">The people who shape your days, held in one thoughtful place.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></section><div className="directory-toolbar"><div className="directory-search"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" aria-label="Search people" /></div><span>{people.length} {people.length === 1 ? 'person' : 'people'}</span></div>{people.length ? <div className="people-grid">{people.map((person) => <article className="person-card" key={person.id}><div className="person-card-top"><Avatar person={person} size="lg" /><div className="card-actions"><button className="card-action" onClick={() => onEdit(person.id)} aria-label={`Edit ${person.name}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(person.id)} aria-label={`Delete ${person.name}`}><Trash2 size={15} /></button></div></div><h2>{person.name}</h2><p className="relationship">{person.relationship}</p><p className="person-detail">{person.detail || 'Add a little context to remember what matters.'}</p><div className="person-divider" /><div className="no-plan"><BookOpen size={15} /><span>{person.note || 'No note added yet'}</span></div><button className="view-person" onClick={() => onEdit(person.id)}>Edit profile <Edit3 size={15} /></button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Users size={23} /></div><h2>No one by that name yet.</h2><p>Try another search, or add someone new to your circle.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></div>}</div>; }
 
-function PlansPage({ plans, people, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const now = new Date().toISOString().slice(0, 10); const upcoming = plans.filter((plan) => plan.plan_date >= now); const past = plans.filter((plan) => plan.plan_date < now); return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section><div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
+function PlansPage({ plans, people, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section><div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
 
 function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {plan.plan_time.slice(0, 5)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
 
@@ -502,9 +553,15 @@ function PersonModal({ person, onClose, onSubmit }: { person?: Person; onClose: 
 
 function PlanModal({ plan, people, onClose, onSubmit }: { plan?: Plan; people: Person[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={plan ? 'Edit plan' : 'Add a plan'} eyebrow="YOUR TIME" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={plan?.title} autoFocus placeholder="e.g. Dinner with Maya" required /></label><div className="form-row"><label>Date<input type="date" name="plan_date" defaultValue={plan?.plan_date} required /></label><label>Time<input type="time" name="plan_time" defaultValue={plan?.plan_time?.slice(0, 5)} required /></label></div><div className="form-row"><label>Person<select name="person_id" defaultValue={plan?.person_id || ''}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>Category<select name="category" defaultValue={plan?.category || 'Personal'}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div><label>Context<span className="label-optional">Optional</span><textarea name="context" defaultValue={plan?.context} placeholder="What do you want to keep in mind?" /></label><ModalActions onClose={onClose} label={plan ? 'Save changes' : 'Add plan'} /></form></ModalFrame>; }
 
-function GoalModal({ goal, onClose, onSubmit }: { goal?: Goal; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={goal ? 'Edit goal' : 'Add a monthly goal'} eyebrow="THIS MONTH" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={goal?.title} autoFocus placeholder="e.g. Protect two evenings for rest" required /></label><label>Category<select name="category" defaultValue={goal?.category || 'Relationships'}>{goalCategories.map((category) => <option key={category}>{category}</option>)}</select></label><label>Description<span className="label-optional">Optional</span><textarea name="description" defaultValue={goal?.description} placeholder="What would this look like in practice?" /></label>{goal && <label>Status<select name="status" defaultValue={goal.status}><option value="active">Active</option><option value="completed">Completed</option></select></label>}<ModalActions onClose={onClose} label={goal ? 'Save changes' : 'Add goal'} /></form></ModalFrame>; }
+function GoalModal({ goal, error, onClose, onSubmit }: { goal?: Goal; error: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={goal ? 'Edit goal' : 'Add a monthly goal'} eyebrow="THIS MONTH" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={goal?.title} autoFocus placeholder="e.g. Protect two evenings for rest" required /></label><label>Category<select name="category" defaultValue={goal?.category || 'Relationships'}>{goalCategories.map((category) => <option key={category}>{category}</option>)}</select></label><label>Description<span className="label-optional">Optional</span><textarea name="description" defaultValue={goal?.description} placeholder="What would this look like in practice?" /></label>{goal && <label>Status<select name="status" defaultValue={goal.status}><option value="active">Active</option><option value="completed">Completed</option></select></label>}{error && <p className="form-error" role="alert">{error}</p>}<ModalActions onClose={onClose} label={goal ? 'Save changes' : 'Add goal'} /></form></ModalFrame>; }
 
-function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: React.ReactNode }) { return <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
+function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
 function PlaceholderPage({ page, navigate }: { page: Page; navigate: (page: Page) => void }) { const label = navigation.find((item) => item.id === page)?.label; return <div className="page-wrap placeholder-page"><div className="placeholder-mark"><Sparkles size={22} /></div><p className="eyebrow">COMING NEXT</p><h1>{label} will feel intentional.</h1><p>This space is reserved for a calm, useful way to work with your {label?.toLowerCase()}. It is not connected yet.</p><button className="quiet-button" onClick={() => navigate('home')}>Return home <ArrowUpRight size={15} /></button></div>; }

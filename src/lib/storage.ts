@@ -1,7 +1,29 @@
 const storagePrefix = 'kinly-demo';
 
+// Some browsers block localStorage (private mode) or it can be full. Keep a copy
+// in memory so the app still works for the current visit instead of crashing.
+const memoryStore = new Map<string, string>();
+
+function getItem(key: string): string | null {
+  if (memoryStore.has(key)) return memoryStore.get(key) ?? null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setItem(key: string, value: string): void {
+  memoryStore.set(key, value);
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable — the in-memory copy above is used for this visit.
+  }
+}
+
 export function readLocalCollection<T>(key: string, fallback: T[]): T[] {
-  const stored = window.localStorage.getItem(`${storagePrefix}:${key}`);
+  const stored = getItem(`${storagePrefix}:${key}`);
   if (!stored) {
     writeLocalCollection(key, fallback);
     return fallback;
@@ -17,7 +39,7 @@ export function readLocalCollection<T>(key: string, fallback: T[]): T[] {
 }
 
 export function writeLocalCollection<T>(key: string, values: T[]): void {
-  window.localStorage.setItem(`${storagePrefix}:${key}`, JSON.stringify(values));
+  setItem(`${storagePrefix}:${key}`, JSON.stringify(values));
 }
 
 export function createLocalId(): string {

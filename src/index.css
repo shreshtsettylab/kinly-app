@@ -366,6 +366,7 @@ kbd {
   border: 1px solid #E6C6C6; border-radius: 7px; color: var(--color-error);
   background: #FBF2F2; font-size: 12px;
 }
+.form-error { margin: 0; padding: 10px 12px; border: 1px solid #E6C6C6; border-radius: 6px; color: var(--color-error); background: #FBF2F2; font-size: 12px; }
 .error-banner button { display: grid; place-items: center; border: 0; color: inherit; background: transparent; }
 .loading-state { min-height: calc(100vh - 76px); display: grid; place-content: center; justify-items: center; color: var(--text-muted); font-size: 12px; }
 .loading-dot { width: 12px; height: 12px; margin-bottom: 12px; border: 2px solid var(--brand-100); border-top-color: var(--brand-500); border-radius: 50%; animation: spin .8s linear infinite; }
