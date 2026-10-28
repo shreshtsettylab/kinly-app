@@ -1,4 +1,10 @@
 /*
+# WARNING — do not apply this to a real database as written.
+# The app does not use Supabase; it stores data only in the browser.
+# The policies below let ANYONE with the public (anon) key read, change and
+# delete every row. Before using Supabase, add sign-in and per-user policies
+# (e.g. an owner_id column checked against auth.uid()).
+
 # Create Kinly demo data tables
 
 1. New Tables

@@ -8,30 +8,36 @@ import {
   CircleHelp,
   Clock3,
   Command,
+  Download,
   Edit3,
   Home,
   Menu,
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Target,
   Trash2,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
-import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/storage';
+import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, prompts, type Person as SeedPerson } from './mockData';
 
 type Page = 'home' | 'people' | 'plans' | 'reflections' | 'goals' | 'settings';
 type Person = Omit<SeedPerson, 'id'> & { id: string };
 type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
-type Reflection = { id: string; text: string; created_at: string };
+type Reflection = { id: string; text: string; created_at: string; person_id?: string | null };
 type Modal = 'person' | 'plan' | 'goal' | null;
 type DecisionOption = { label: string; detail: string; evidence: string };
+type Memory = { label: string; date: string; text: string };
 type DecisionResult = {
+  kind: 'decide' | 'recall' | 'when';
   summary: string;
+  memories: Memory[];
   options: DecisionOption[];
   reasonsToMeet: string[];
   reasonsToPostpone: string[];
@@ -76,15 +82,31 @@ function isUpcoming(plan: Plan): boolean {
 }
 
 const bySoonest = (a: Plan, b: Plan) => planMoment(a).localeCompare(planMoment(b));
+const byNewest = (a: Reflection, b: Reflection) => b.created_at.localeCompare(a.created_at);
+
+function relativeDay(dateKey: string): string {
+  const days = Math.round((new Date(`${dateKey}T12:00:00`).getTime() - new Date(`${localDateKey()}T12:00:00`).getTime()) / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  if (days === -1) return 'yesterday';
+  return days > 0 ? `in ${days} days` : `${-days} days ago`;
+}
+
+const reflectionDate = (reflection: Reflection) => fmtDate(localDateKey(new Date(reflection.created_at)));
 
 // Everyday words that would otherwise match almost any saved note.
 const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'about', 'that', 'this', 'what', 'when', 'where', 'which', 'who', 'why', 'how', 'did', 'does', 'should', 'would', 'could', 'can', 'will', 'was', 'were', 'are', 'have', 'has', 'had', 'last', 'next', 'tonight', 'today', 'tomorrow', 'into', 'them', 'they', 'their', 'her', 'his', 'him', 'she', 'you', 'your', 'our', 'not', 'but', 'any', 'some', 'just', 'feel', 'think', 'want', 'need', 'get']);
 
-const wordsOf = (text: string) => text.toLowerCase().match(/[a-z0-9']+/g) || [];
+const wordsOf = (text: string): string[] => text.toLowerCase().match(/[a-z0-9']+/g) || [];
 
-function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[]): DecisionResult {
+function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[]): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
+  // "Should I…" is always a decision; otherwise look for recall ("what did I learn") or timing ("when") questions.
+  const kind: NonNullable<DecisionResult>['kind'] = /\b(should|shall|worth)\b/.test(q) ? 'decide'
+    : /\b(learn|learned|learnt|remember|recall|notes?|reflect\w*|happened|how did|how was)\b/.test(q) ? 'recall'
+      : /\b(when|how long)\b/.test(q) ? 'when' : 'decide';
+  const when = /\btonight\b/.test(q) ? 'tonight' : /\btoday\b/.test(q) ? 'today' : /\btomorrow\b/.test(q) ? 'tomorrow' : /\bweekend\b/.test(q) ? 'this weekend' : 'right now';
   const questionWords = new Set(wordsOf(q));
   const tokens = [...questionWords].filter((word) => word.length > 2 && !stopWords.has(word));
   const mentions = (text: string) => {
@@ -107,7 +129,45 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   const person = matchedPeople[0];
   const personName = person?.name;
   const personPlans = person ? upcoming.filter((plan) => plan.person_id === person.id) : [];
-  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)) : [];
+  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)) : [];
+  const firstName = person ? person.name.split(' ')[0] : '';
+  const personReflections = person ? reflections.filter((reflection) => reflection.person_id === person.id || wordsOf(reflection.text).includes(firstName.toLowerCase())).sort(byNewest) : [];
+  const reflectionMemory = (reflection: Reflection): Memory => ({ label: 'Reflection', date: reflectionDate(reflection), text: reflection.text });
+  const planMemory = (plan: Plan): Memory => ({ label: plan.title, date: fmtDate(plan.plan_date), text: plan.context || 'No context saved for this plan.' });
+  const empty = { options: [], reasonsToMeet: [], reasonsToPostpone: [], reasonsToGatherMore: [], tradeoffs: [], recommendation: null, matchedPeople, matchedPlans };
+
+  // --- Recall: what have I saved about this person or topic? ---
+  if (kind === 'recall') {
+    const found = person ? personReflections : reflections.filter((reflection) => mentions(reflection.text)).sort(byNewest);
+    const pastPlans = person ? personPastPlans : matchedPlans.filter((plan) => !isUpcoming(plan));
+    const memories = [
+      ...(person?.note ? [{ label: 'Your note', date: '', text: person.note }] : []),
+      ...found.slice(0, 5).map(reflectionMemory),
+      ...pastPlans.slice(0, 3).map(planMemory),
+    ];
+    const lastPlan = pastPlans[0];
+    const summary = person
+      ? `Here is what you have saved about ${personName}.${lastPlan ? ` Your last plan together was "${lastPlan.title}", ${relativeDay(lastPlan.plan_date)}.` : ''}`
+      : memories.length ? 'Here is what you have saved that relates to this question.' : 'Nothing you have saved matches this question yet.';
+    const followUp = found.length ? null
+      : person ? `You have not written a reflection about ${personName} yet. After your next time together, add a few lines in Reflections and tag ${firstName} — it will show up here.`
+        : 'Try including a person’s name, or write a reflection first so there is something to look back on.';
+    return { kind, summary, memories, followUp, ...empty };
+  }
+
+  // --- When: last and next time with this person ---
+  if (kind === 'when' && person) {
+    const last = personPastPlans[0];
+    const next = personPlans[0];
+    const summary = [
+      last ? `You last had a plan with ${personName} ${relativeDay(last.plan_date)}: "${last.title}" on ${fmtDate(last.plan_date)}.` : `There are no past plans with ${personName} in your saved data.`,
+      next ? `Your next plan together is "${next.title}" ${relativeDay(next.plan_date)}, on ${fmtDate(next.plan_date)} at ${next.plan_time.slice(0, 5)}.` : `Nothing is planned with ${personName} yet.`,
+    ].join(' ');
+    const memories = [...(next ? [planMemory(next)] : []), ...(last ? [planMemory(last)] : []), ...personReflections.slice(0, 1).map(reflectionMemory)];
+    const followUp = next ? null : `Would you like to make time for ${firstName}? Add a plan when it feels right.`;
+    return { kind, summary, memories, followUp, ...empty };
+  }
+
   const activeGoals = goals.filter((goal) => goal.status === 'active');
   const scheduleCount = upcoming.length;
 
@@ -125,6 +185,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     contextParts.push(`${personName} is saved in your circle as "${person.relationship}".`);
     if (person.note) contextParts.push(`Your note about them: "${person.note}"`);
     if (person.detail) contextParts.push(`Context you saved: "${person.detail}"`);
+    if (personReflections.length) contextParts.push(`You have ${personReflections.length} reflection${personReflections.length === 1 ? '' : 's'} about ${firstName}; the most recent is from ${reflectionDate(personReflections[0])}.`);
   }
 
   if (personPlans.length) {
@@ -177,28 +238,28 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
       reasonsToPostpone.push(`You already have ${scheduleCount} upcoming plans. Adding another may spread your attention thin.`);
     }
     if (personPlans.length) {
-      reasonsToPostpone.push(`You already have a plan with ${personName} on ${fmtDate(personPlans[0].plan_date)}. Meeting again tonight may be redundant.`);
+      reasonsToPostpone.push(`You already have a plan with ${personName} on ${fmtDate(personPlans[0].plan_date)}. Meeting again ${when} may be redundant.`);
     }
     if (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')) {
-      reasonsToPostpone.push(`You have an active ${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.category} goal: "${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.title}". An evening at home might serve that.`);
+      reasonsToPostpone.push(`You have an active ${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.category} goal: "${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.title}". Some time to yourself might serve that.`);
     }
 
     // Reasons to gather more info
     if (!person.note && !person.detail) {
       reasonsToGatherMore.push(`You have not saved a note or context for ${personName}. Adding one would make this decision clearer.`);
     }
-    reasonsToGatherMore.push(`Check how you feel physically and socially tonight — your saved data cannot tell you your current energy level.`);
+    reasonsToGatherMore.push(`Check how you feel physically and socially ${when} — your saved data cannot tell you your current energy level.`);
 
     // Options with evidence
     if (personPlans.length) {
-      options.push({ label: 'Keep the existing plan', detail: `You already have "${personPlans[0].title}" with ${personName} on ${fmtDate(personPlans[0].plan_date)} at ${personPlans[0].plan_time.slice(0, 5)}. Consider whether tonight is in addition to that or instead of it.`, evidence: `Saved plan: "${personPlans[0].title}" on ${personPlans[0].plan_date} at ${personPlans[0].plan_time}.` });
+      options.push({ label: 'Keep the existing plan', detail: `You already have "${personPlans[0].title}" with ${personName} on ${fmtDate(personPlans[0].plan_date)} at ${personPlans[0].plan_time.slice(0, 5)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${personPlans[0].title}" on ${personPlans[0].plan_date} at ${personPlans[0].plan_time}.` });
     } else {
-      options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your evening.`, evidence: `${personName} has no upcoming plans in your saved data.` });
+      options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your week.`, evidence: `${personName} has no upcoming plans in your saved data.` });
     }
-    options.push({ label: 'Postpone and protect the evening', detail: `Stay home tonight and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: scheduleCount >= 3 ? `You have ${scheduleCount} upcoming plans already.` : `No specific plan with ${personName} would be disrupted.` });
+    options.push({ label: 'Postpone and protect your time', detail: `Hold off and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: scheduleCount >= 3 ? `You have ${scheduleCount} upcoming plans already.` : `No specific plan with ${personName} would be disrupted.` });
 
     // Trade-offs
-    tradeoffs.push('Meeting tonight sustains closeness, but if your energy is low it may not feel meaningful to either of you.');
+    tradeoffs.push(`Meeting ${when} sustains closeness, but if your energy is low it may not feel meaningful to either of you.`);
     tradeoffs.push('Postponing protects your energy, but delays the follow-through your note suggests matters.');
     if (personPlans.length) tradeoffs.push('Adding a second plan so close to an existing one may dilute the quality of both.');
 
@@ -207,9 +268,9 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     const postponeSignal = (scheduleCount >= 3 ? 1 : 0) + (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing') ? 1 : 0) + (personPlans.length ? 1 : 0);
 
     if (meetSignal >= 2 && postponeSignal <= 1) {
-      recommendation = `Based on your saved notes and goals, meeting ${personName} seems well-supported — but only if your energy tonight can hold it. If not, postponing is a reasonable choice.`;
+      recommendation = `Based on your saved notes and goals, meeting ${personName} seems well-supported — but only if your energy ${when} can hold it. If not, postponing is a reasonable choice.`;
     } else if (postponeSignal >= 2 && meetSignal <= 1) {
-      recommendation = `Your saved plans and goals suggest the evening might be better spent resting. Consider reaching out to ${personName} to set something up for later this week instead.`;
+      recommendation = `Your saved plans and goals suggest your time might be better spent resting. Consider reaching out to ${personName} to set something up for later this week instead.`;
     } else {
       recommendation = null;
       followUp = `What is your energy like right now? Your saved data does not capture how today has felt, and that matters as much as the plans and notes here.`;
@@ -224,11 +285,11 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (plan.context) reasonsToMeet.push(`Your saved context: "${plan.context}"`);
     if (linkedPerson) reasonsToMeet.push(`This plan is linked to ${linkedPerson.name}.`);
 
-    reasonsToPostpone.push(`The plan is set for ${fmtDate(plan.plan_date)} — meeting tonight would be in addition to, not instead of, that.`);
+    reasonsToPostpone.push(`The plan is set for ${fmtDate(plan.plan_date)} — meeting ${when} would be in addition to, not instead of, that.`);
     if (scheduleCount >= 3) reasonsToPostpone.push(`You have ${scheduleCount} upcoming plans already.`);
 
-    if (!plan.context) reasonsToGatherMore.push(`This plan has no saved context. Adding one would clarify whether tonight fits.`);
-    reasonsToGatherMore.push(`Check whether anything else on your calendar tonight conflicts.`);
+    if (!plan.context) reasonsToGatherMore.push(`This plan has no saved context. Adding one would clarify whether the timing fits.`);
+    reasonsToGatherMore.push(`Check whether anything else on your calendar conflicts.`);
 
     options.push({ label: 'Go ahead with the saved plan', detail: `"${plan.title}" is already on your calendar for ${fmtDate(plan.plan_date)}. Trust the intention you captured.`, evidence: `Saved plan: "${plan.title}" on ${plan.plan_date} at ${plan.plan_time}.` });
     options.push({ label: 'Reconsider the timing', detail: `Review whether the current slot competes with a rest or wellbeing goal before confirming.`, evidence: activeGoals.length ? `Active goals: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.` : `No active goals saved.` });
@@ -251,20 +312,20 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
       reasonsToMeet.push(`Your active goal "${goal.title}" (${goal.category}) could benefit from a concrete step this week.`);
       if (goal.description) reasonsToMeet.push(`Goal description: "${goal.description}"`);
     }
-    reasonsToPostpone.push(`"${goal.title}" is a monthly goal — there is time, and not every evening needs to advance it.`);
-    reasonsToGatherMore.push(`Consider which specific action would move "${goal.title}" forward before committing tonight.`);
+    reasonsToPostpone.push(`"${goal.title}" is a monthly goal — there is time, and not every day needs to advance it.`);
+    reasonsToGatherMore.push(`Consider which specific action would move "${goal.title}" forward before committing.`);
 
     options.push({ label: 'Take a small step toward it', detail: `Choose one concrete action this week that moves "${goal.title}" forward.`, evidence: `Active goal: "${goal.title}" in ${goal.category}.` });
-    options.push({ label: 'Pause and revisit', detail: `Let the goal sit if your attention is needed elsewhere tonight.`, evidence: `Monthly goal — no immediate deadline in your saved data.` });
+    options.push({ label: 'Pause and revisit', detail: `Let the goal sit if your attention is needed elsewhere right now.`, evidence: `Monthly goal — no immediate deadline in your saved data.` });
 
     tradeoffs.push('A small step sustains momentum without overwhelming your week.');
     tradeoffs.push('Pausing avoids overcommitting but risks losing the thread of the goal.');
 
     if (goal.status === 'active' && goal.description) {
-      recommendation = `Your goal "${goal.title}" has a description, which suggests you have thought about it. A small step tonight could be worthwhile if your evening is otherwise open.`;
+      recommendation = `Your goal "${goal.title}" has a description, which suggests you have thought about it. A small step ${when} could be worthwhile if your time is otherwise open.`;
     } else {
       recommendation = null;
-      followUp = `What would a "small step" toward "${goal.title}" look like concretely? Deciding that first would make tonight's choice clearer.`;
+      followUp = `What would a "small step" toward "${goal.title}" look like concretely? Deciding that first would make this choice clearer.`;
     }
 
   // --- No match, but upcoming plans exist ---
@@ -301,7 +362,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
 
   const summary = contextParts.join(' ');
 
-  return { summary, options, reasonsToMeet, reasonsToPostpone, reasonsToGatherMore, tradeoffs, recommendation, followUp, matchedPeople, matchedPlans };
+  return { kind, summary, memories: personReflections.slice(0, 2).map(reflectionMemory), options, reasonsToMeet, reasonsToPostpone, reasonsToGatherMore, tradeoffs, recommendation, followUp, matchedPeople, matchedPlans };
 }
 
 const navigation: { id: Page; label: string; icon: typeof Home }[] = [
@@ -318,7 +379,17 @@ const goalCategories = ['Work', 'Learning', 'Relationships', 'Wellbeing', 'Rest'
 const maxActiveGoals = 3;
 const goalLimitMessage = 'You can keep up to three active monthly goals. Complete or remove one first.';
 const countActive = (goals: { status: string }[]) => goals.filter((goal) => goal.status === 'active').length;
-const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+// Fields every saved item must have; used to check backup files before importing them.
+const collectionFields = {
+  people: ['id', 'name', 'initials', 'relationship', 'color'],
+  plans: ['id', 'title', 'plan_date', 'plan_time', 'category'],
+  goals: ['id', 'title', 'category', 'status', 'month_start'],
+  reflections: ['id', 'text', 'created_at'],
+};
+type CollectionKey = keyof typeof collectionFields;
+const collectionKeys = Object.keys(collectionFields) as CollectionKey[];
+const isValidItem = (item: unknown, fields: string[]) => !!item && typeof item === 'object' && fields.every((field) => typeof (item as Record<string, unknown>)[field] === 'string');
+const shortcutLabel =/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 function Avatar({ person, size = 'md' }: { person: Person; size?: 'sm' | 'md' | 'lg' }) {
   return <div className={`avatar avatar-${size}`} style={{ backgroundColor: person.color }} aria-label={person.name}>{person.initials}</div>;
@@ -343,7 +414,9 @@ function App() {
     setLoading(true);
     setError('');
     const loadedPeople = readLocalCollection<Person>('people', seedPeople);
+    const mayaId = loadedPeople.find((person) => person.name === 'Maya Chen')?.id || null;
     const seedPlans: Plan[] = [
+      { id: 'coffee-with-maya', title: 'Coffee with Maya', plan_date: daysFromToday(-9), plan_time: '09:30', person_id: mayaId, category: 'Social', context: 'She talked through the studio move. Listening helped more than advice.' },
       { id: 'dinner-at-lupa', title: 'Dinner at Lupa', plan_date: daysFromToday(1), plan_time: '19:00', person_id: loadedPeople.find((person) => person.name === 'Maya Chen')?.id || null, category: 'Social', context: 'A chance to catch up without rushing.' },
       { id: 'prospect-park-walk', title: 'Walk in Prospect Park', plan_date: daysFromToday(3), plan_time: '10:30', person_id: loadedPeople.find((person) => person.name === 'Arjun Mehta')?.id || null, category: 'Wellbeing', context: 'Keep the morning unhurried.' },
       { id: 'project-catch-up', title: 'Project catch-up', plan_date: daysFromToday(5), plan_time: '14:00', person_id: loadedPeople.find((person) => person.name === 'Elena Rossi')?.id || null, category: 'Work', context: 'Bring the first draft.' },
@@ -351,7 +424,10 @@ function App() {
     setPeople(loadedPeople);
     setPlans(readLocalCollection<Plan>('plans', seedPlans));
     setGoals(readLocalCollection<Goal>('goals', []));
-    setReflections(readLocalCollection<Reflection>('reflections', []));
+    const seedReflections: Reflection[] = [
+      { id: 'coffee-with-maya-reflection', text: 'Coffee with Maya reminded me that she needs room to think out loud before she wants suggestions. Next time, ask how the studio move is going and just listen.', created_at: new Date(Date.now() - 9 * 86400000).toISOString(), person_id: mayaId },
+    ];
+    setReflections(readLocalCollection<Reflection>('reflections', seedReflections));
     setLoading(false);
   };
 
@@ -404,6 +480,7 @@ function App() {
     const nextPeople = people.filter((person) => person.id !== id);
     writeLocalCollection('people', nextPeople);
     writeLocalCollection('plans', plans.map((plan) => plan.person_id === id ? { ...plan, person_id: null } : plan));
+    writeLocalCollection('reflections', reflections.map((reflection) => reflection.person_id === id ? { ...reflection, person_id: null } : reflection));
     loadData();
   };
 
@@ -460,7 +537,7 @@ function App() {
     const form = new FormData(event.currentTarget);
     const text = String(form.get('text') || '').trim();
     if (!text) return;
-    const next = [{ id: createLocalId(), text, created_at: new Date().toISOString() }, ...reflections];
+    const next = [{ id: createLocalId(), text, created_at: new Date().toISOString(), person_id: String(form.get('person_id') || '') || null }, ...reflections];
     writeLocalCollection('reflections', next);
     (event.target as HTMLFormElement).reset();
     loadData();
@@ -472,8 +549,48 @@ function App() {
     loadData();
   };
 
+  const exportData = (): string => {
+    const backup = { app: 'kinly', version: 1, exported_at: new Date().toISOString(), people, plans, goals, reflections };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `kinly-backup-${localDateKey()}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return 'Backup downloaded. Keep the file somewhere safe.';
+  };
+
+  const importData = async (file: File): Promise<string> => {
+    let data: Partial<Record<CollectionKey, unknown>>;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      return 'That file could not be read. Choose a Kinly backup (.json) file.';
+    }
+    const valid = !!data && typeof data === 'object' && collectionKeys.every((key) => Array.isArray(data[key]) && (data[key] as unknown[]).every((item) => isValidItem(item, collectionFields[key])));
+    if (!valid) return 'That file does not look like a Kinly backup, so nothing was changed.';
+    if (!window.confirm('Replace everything saved in this browser with this backup?')) return '';
+    collectionKeys.forEach((key) => writeLocalCollection(key, data[key] as unknown[]));
+    loadData();
+    return 'Backup restored.';
+  };
+
+  const deleteAllData = (): string => {
+    if (!window.confirm('Delete all people, plans, goals and reflections saved in this browser? This cannot be undone. Consider exporting a backup first.')) return '';
+    collectionKeys.forEach((key) => writeLocalCollection(key, []));
+    loadData();
+    return 'All your data has been deleted from this browser.';
+  };
+
+  const restoreExamples = (): string => {
+    if (!window.confirm('Replace your current data with the example people and plans?')) return '';
+    collectionKeys.forEach((key) => removeLocalCollection(key));
+    loadData();
+    return 'The example people and plans are back.';
+  };
+
   const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
-  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals), [submittedQuestion, people, plans, goals]);
+  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections), [submittedQuestion, people, plans, goals, reflections]);
 
   const openModal = (type: Modal, id: string | null = null) => { setModal(type); setEditingId(id); setError(''); };
 
@@ -499,8 +616,8 @@ function App() {
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
-          {page === 'reflections' && <ReflectionsPage reflections={reflections} onSave={saveReflection} onDelete={deleteReflection} />}
-          {page === 'settings' && <PlaceholderPage page={page} navigate={navigate} />}
+          {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} />}
+          {page === 'settings' && <SettingsPage counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
         </>}
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
@@ -532,21 +649,22 @@ function EmptyInline({ text, action, onClick }: { text: string; action: string; 
 
 function DecisionPanel({ decision }: { decision: NonNullable<DecisionResult> }) {
   return <div className="decision-panel">
-    <div className="decision-header"><span className="card-kicker">DECISION SUPPORT — FROM YOUR SAVED DATA</span><p className="decision-summary">{decision.summary}</p></div>
+    <div className="decision-header"><span className="card-kicker">{decision.kind === 'recall' ? 'LOOKING BACK — FROM YOUR SAVED DATA' : decision.kind === 'when' ? 'YOUR TIME TOGETHER — FROM YOUR SAVED DATA' : 'DECISION SUPPORT — FROM YOUR SAVED DATA'}</span><p className="decision-summary">{decision.summary}</p></div>
     {decision.matchedPeople.length > 0 && <div className="decision-match"><Users size={14} /><span>Related: {decision.matchedPeople.map((p) => p.name).join(', ')}</span></div>}
     {decision.matchedPlans.length > 0 && <div className="decision-match"><CalendarDays size={14} /><span>Related plans: {decision.matchedPlans.map((p) => p.title).join(', ')}</span></div>}
-    <div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p><span className="decision-evidence">{option.evidence}</span></div>)}</div>
+    {decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">WHAT YOU SAVED</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>}
+    {decision.options.length > 0 && <div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p><span className="decision-evidence">{option.evidence}</span></div>)}</div>}
     {decision.reasonsToMeet.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO MEET / GO AHEAD</span><ul>{decision.reasonsToMeet.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
     {decision.reasonsToPostpone.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO POSTPONE</span><ul>{decision.reasonsToPostpone.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
     {decision.reasonsToGatherMore.length > 0 && <div className="decision-reasons"><span className="card-kicker">GATHER MORE INFORMATION</span><ul>{decision.reasonsToGatherMore.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
-    <div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div>
+    {decision.tradeoffs.length > 0 && <div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div>}
     {decision.recommendation && <div className="decision-next"><Sparkles size={15} /><span><strong>Tentative recommendation: </strong>{decision.recommendation}</span></div>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
   </div>;
 }
 
-function ReflectionsPage({ reflections, onSave, onDelete }: { reflections: Reflection[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void }) {
-  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label><div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><BookOpen size={20} /></div><p>No reflections yet. Start with one above.</p></div>}</section></div>;
+function ReflectionsPage({ reflections, people, onSave, onDelete }: { reflections: Reflection[]; people: Person[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void }) {
+  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><BookOpen size={20} /></div><p>No reflections yet. Start with one above.</p></div>}</section></div>;
 }
 
 function PersonModal({ person, onClose, onSubmit }: { person?: Person; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={person ? 'Edit person' : 'Add someone'} eyebrow="YOUR CIRCLE" onClose={onClose}><form onSubmit={onSubmit}><label>Name<input name="name" defaultValue={person?.name} autoFocus placeholder="e.g. Alex Morgan" required /></label><label>Relationship<span className="label-optional">Optional</span><input name="relationship" defaultValue={person?.relationship} placeholder="e.g. close friend, colleague" /></label><label>Context<span className="label-optional">Optional</span><input name="detail" defaultValue={person?.detail} placeholder="What helps you remember this relationship?" /></label><label>Note<span className="label-optional">Optional</span><textarea name="note" defaultValue={person?.note} placeholder="A small thing worth remembering" /></label><ModalActions onClose={onClose} label={person ? 'Save changes' : 'Add person'} /></form></ModalFrame>; }
@@ -564,6 +682,25 @@ function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyeb
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
-function PlaceholderPage({ page, navigate }: { page: Page; navigate: (page: Page) => void }) { const label = navigation.find((item) => item.id === page)?.label; return <div className="page-wrap placeholder-page"><div className="placeholder-mark"><Sparkles size={22} /></div><p className="eyebrow">COMING NEXT</p><h1>{label} will feel intentional.</h1><p>This space is reserved for a calm, useful way to work with your {label?.toLowerCase()}. It is not connected yet.</p><button className="quiet-button" onClick={() => navigate('home')}>Return home <ArrowUpRight size={15} /></button></div>; }
+function SettingsPage({ counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
+  const [status, setStatus] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  const choseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) setStatus(await onImport(file));
+  };
+  return <div className="page-wrap settings-page">
+    <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
+    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <div className="settings-grid">
+      <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>
+      <section className="content-card settings-card"><span className="card-kicker">RESTORE</span><h2>Import a backup</h2><p>Load a backup file you exported earlier. It replaces what is saved in this browser now.</p><div className="settings-actions"><button className="quiet-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Import backup</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={choseFile} /></div></section>
+      <section className="content-card settings-card"><span className="card-kicker">START FRESH</span><h2>Clear your space</h2><p>Remove everything saved here, or bring back the example people and plans to explore again.</p><div className="settings-actions"><button className="quiet-button danger-button" onClick={() => setStatus(onDeleteAll())}><Trash2 size={16} /> Delete all data</button><button className="quiet-button" onClick={() => setStatus(onRestoreExamples())}>Restore examples</button></div></section>
+    </div>
+    {status && <p className="settings-status" role="status">{status}</p>}
+  </div>;
+}
 
 export default App;

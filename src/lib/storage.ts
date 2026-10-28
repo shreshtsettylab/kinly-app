@@ -42,6 +42,16 @@ export function writeLocalCollection<T>(key: string, values: T[]): void {
   setItem(`${storagePrefix}:${key}`, JSON.stringify(values));
 }
 
+export function removeLocalCollection(key: string): void {
+  const fullKey = `${storagePrefix}:${key}`;
+  memoryStore.delete(fullKey);
+  try {
+    window.localStorage.removeItem(fullKey);
+  } catch {
+    // Storage unavailable — nothing was saved there to remove.
+  }
+}
+
 export function createLocalId(): string {
   return typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

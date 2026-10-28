@@ -76,4 +76,5 @@ export const upcomingPlans = [
 export const prompts = [
   'Should I meet Arjun tonight?',
   'What did I learn from my last meeting with Maya?',
+  'When am I next seeing Elena?',
 ];
