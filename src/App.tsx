@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
-import { people as seedPeople, prompts, type Person as SeedPerson } from './mockData';
+import { people as seedPeople, type Person as SeedPerson } from './mockData';
 
 type Page = 'home' | 'people' | 'plans' | 'reflections' | 'goals' | 'settings';
 type Person = Omit<SeedPerson, 'id'> & { id: string };
@@ -34,8 +34,14 @@ type Reflection = { id: string; text: string; created_at: string; person_id?: st
 type Modal = 'person' | 'plan' | 'goal' | null;
 type DecisionOption = { label: string; detail: string; evidence: string };
 type Memory = { label: string; date: string; text: string };
+type Glance = { label: string; value: string };
+type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reason: string };
+type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
+type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling };
 type DecisionResult = {
   kind: 'decide' | 'recall' | 'when';
+  verdict: Verdict;
+  glance: Glance[];
   summary: string;
   memories: Memory[];
   options: DecisionOption[];
@@ -43,7 +49,6 @@ type DecisionResult = {
   reasonsToPostpone: string[];
   reasonsToGatherMore: string[];
   tradeoffs: string[];
-  recommendation: string | null;
   followUp: string | null;
   matchedPeople: Person[];
   matchedPlans: Plan[];
@@ -84,8 +89,12 @@ function isUpcoming(plan: Plan): boolean {
 const bySoonest = (a: Plan, b: Plan) => planMoment(a).localeCompare(planMoment(b));
 const byNewest = (a: Reflection, b: Reflection) => b.created_at.localeCompare(a.created_at);
 
+function daysUntil(dateKey: string): number {
+  return Math.round((new Date(`${dateKey}T12:00:00`).getTime() - new Date(`${localDateKey()}T12:00:00`).getTime()) / 86400000);
+}
+
 function relativeDay(dateKey: string): string {
-  const days = Math.round((new Date(`${dateKey}T12:00:00`).getTime() - new Date(`${localDateKey()}T12:00:00`).getTime()) / 86400000);
+  const days = daysUntil(dateKey);
   if (days === 0) return 'today';
   if (days === 1) return 'tomorrow';
   if (days === -1) return 'yesterday';
@@ -93,16 +102,55 @@ function relativeDay(dateKey: string): string {
 }
 
 const reflectionDate = (reflection: Reflection) => fmtDate(localDateKey(new Date(reflection.created_at)));
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
 // Everyday words that would otherwise match almost any saved note.
 const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'about', 'that', 'this', 'what', 'when', 'where', 'which', 'who', 'why', 'how', 'did', 'does', 'should', 'would', 'could', 'can', 'will', 'was', 'were', 'are', 'have', 'has', 'had', 'last', 'next', 'tonight', 'today', 'tomorrow', 'into', 'them', 'they', 'their', 'her', 'his', 'him', 'she', 'you', 'your', 'our', 'not', 'but', 'any', 'some', 'just', 'feel', 'think', 'want', 'need', 'get']);
 
 const wordsOf = (text: string): string[] => text.toLowerCase().match(/[a-z0-9']+/g) || [];
 
+// A simple, transparent feeling check: counts warm and draining words in a reflection.
+const warmWords = new Set(['good', 'great', 'lovely', 'happy', 'warm', 'close', 'fun', 'easy', 'calm', 'relaxed', 'relaxing', 'enjoyed', 'enjoyable', 'grateful', 'thankful', 'laughed', 'laughing', 'meaningful', 'nourishing', 'restored', 'restorative', 'energised', 'energized', 'energising', 'energizing', 'connected', 'peaceful', 'glad', 'wonderful', 'supported', 'comfortable']);
+const drainingWords = new Set(['drained', 'draining', 'tired', 'exhausted', 'exhausting', 'rushed', 'stressed', 'stressful', 'tense', 'awkward', 'anxious', 'frustrated', 'frustrating', 'sad', 'upset', 'overwhelmed', 'overwhelming', 'argued', 'argument', 'distant', 'heavy', 'hurt', 'annoyed', 'lonely', 'uncomfortable', 'disappointed', 'disappointing']);
+
+function feelingOf(reflection: Reflection): Feeling {
+  const words = wordsOf(reflection.text);
+  let warm = 0;
+  let draining = 0;
+  words.forEach((word, index) => {
+    const previous = words[index - 1] || '';
+    const negated = previous === 'not' || previous === 'never' || previous === 'no' || previous.endsWith("n't");
+    if (warmWords.has(word)) { if (negated) draining++; else warm++; }
+    if (drainingWords.has(word)) { if (negated) warm++; else draining++; }
+  });
+  const tone: Feeling['tone'] = warm && draining ? 'mixed' : warm ? 'positive' : draining ? 'negative' : 'neutral';
+  const labels = { positive: 'Felt good', negative: 'Felt draining', mixed: 'Felt mixed', neutral: 'No strong feeling noted' };
+  const firstSentence = (reflection.text.match(/^[^.!?\n]*[.!?]?/)?.[0] || reflection.text).trim();
+  const excerpt = firstSentence.length > 120 ? `${firstSentence.slice(0, 117).trimEnd()}…` : firstSentence;
+  return { tone, label: labels[tone], excerpt, date: reflectionDate(reflection) };
+}
+
+// Everything Kinly knows about one person: plans before and after today, and reflections about them.
+function personInsight(person: Person, plans: Plan[], reflections: Reflection[]): PersonInsight {
+  const firstName = person.name.split(' ')[0].toLowerCase();
+  const upcoming = plans.filter((plan) => plan.person_id === person.id && isUpcoming(plan)).sort(bySoonest);
+  const past = plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)).sort((a, b) => bySoonest(b, a));
+  const about = reflections.filter((reflection) => reflection.person_id === person.id || wordsOf(reflection.text).includes(firstName)).sort(byNewest);
+  return { upcoming, past, reflections: about, next: upcoming[0], last: past[0], feeling: about[0] ? feelingOf(about[0]) : undefined };
+}
+
+function glanceFor({ last, next, feeling }: PersonInsight): Glance[] {
+  return [
+    { label: 'Last time together', value: last ? `${last.title} · ${relativeDay(last.plan_date)}` : 'No past plans saved' },
+    { label: 'How you felt', value: feeling ? `${feeling.label} — “${feeling.excerpt}”` : 'No reflections yet' },
+    { label: 'Next plan', value: next ? `${next.title} · ${relativeDay(next.plan_date)} at ${next.plan_time.slice(0, 5)}` : 'Nothing planned yet' },
+  ];
+}
+
 function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[]): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
-  // "Should I…" is always a decision; otherwise look for recall ("what did I learn") or timing ("when") questions.
+  // "Should I…" is always a decision; otherwise look for recall ("how did it go") or timing ("when") questions.
   const kind: NonNullable<DecisionResult>['kind'] = /\b(should|shall|worth)\b/.test(q) ? 'decide'
     : /\b(learn|learned|learnt|remember|recall|notes?|reflect\w*|happened|how did|how was)\b/.test(q) ? 'recall'
       : /\b(when|how long)\b/.test(q) ? 'when' : 'decide';
@@ -126,75 +174,66 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   const matchedGoals = goals.filter((goal) => mentions(`${goal.title} ${goal.category} ${goal.description}`));
 
   const upcoming = plans.filter(isUpcoming).sort(bySoonest);
+  const activeGoals = goals.filter((goal) => goal.status === 'active');
   const person = matchedPeople[0];
-  const personName = person?.name;
-  const personPlans = person ? upcoming.filter((plan) => plan.person_id === person.id) : [];
-  const personPastPlans = person ? plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)) : [];
-  const firstName = person ? person.name.split(' ')[0] : '';
-  const personReflections = person ? reflections.filter((reflection) => reflection.person_id === person.id || wordsOf(reflection.text).includes(firstName.toLowerCase())).sort(byNewest) : [];
+  const insight = person ? personInsight(person, plans, reflections) : null;
+  const personName = person?.name || '';
+  const firstName = personName.split(' ')[0];
   const reflectionMemory = (reflection: Reflection): Memory => ({ label: 'Reflection', date: reflectionDate(reflection), text: reflection.text });
   const planMemory = (plan: Plan): Memory => ({ label: plan.title, date: fmtDate(plan.plan_date), text: plan.context || 'No context saved for this plan.' });
-  const empty = { options: [], reasonsToMeet: [], reasonsToPostpone: [], reasonsToGatherMore: [], tradeoffs: [], recommendation: null, matchedPeople, matchedPlans };
+  const base = { kind, glance: insight ? glanceFor(insight) : [], summary: '', memories: [] as Memory[], options: [] as DecisionOption[], reasonsToMeet: [] as string[], reasonsToPostpone: [] as string[], reasonsToGatherMore: [] as string[], tradeoffs: [] as string[], followUp: null as string | null, matchedPeople, matchedPlans };
 
-  // --- Recall: what have I saved about this person or topic? ---
+  // --- Recall: how did it go, what have I saved? ---
   if (kind === 'recall') {
-    const found = person ? personReflections : reflections.filter((reflection) => mentions(reflection.text)).sort(byNewest);
-    const pastPlans = person ? personPastPlans : matchedPlans.filter((plan) => !isUpcoming(plan));
+    const found = insight ? insight.reflections : reflections.filter((reflection) => mentions(reflection.text)).sort(byNewest);
+    const pastPlans = insight ? insight.past : matchedPlans.filter((plan) => !isUpcoming(plan));
     const memories = [
       ...(person?.note ? [{ label: 'Your note', date: '', text: person.note }] : []),
       ...found.slice(0, 5).map(reflectionMemory),
       ...pastPlans.slice(0, 3).map(planMemory),
     ];
-    const lastPlan = pastPlans[0];
-    const summary = person
-      ? `Here is what you have saved about ${personName}.${lastPlan ? ` Your last plan together was "${lastPlan.title}", ${relativeDay(lastPlan.plan_date)}.` : ''}`
-      : memories.length ? 'Here is what you have saved that relates to this question.' : 'Nothing you have saved matches this question yet.';
-    const followUp = found.length ? null
-      : person ? `You have not written a reflection about ${personName} yet. After your next time together, add a few lines in Reflections and tag ${firstName} — it will show up here.`
-        : 'Try including a person’s name, or write a reflection first so there is something to look back on.';
-    return { kind, summary, memories, followUp, ...empty };
+    const latest = found[0] ? feelingOf(found[0]) : undefined;
+    const verdict: Verdict = person
+      ? { tone: 'info', headline: latest ? `${latest.label} last time` : `No reflections about ${firstName} yet`, reason: insight?.last ? `Your last plan together was "${insight.last.title}", ${relativeDay(insight.last.plan_date)}.` : `There are no past plans with ${firstName} saved yet.` }
+      : { tone: 'info', headline: memories.length ? 'Here is what you saved' : 'Nothing saved about this yet', reason: memories.length ? `${found.length} reflection${found.length === 1 ? '' : 's'} and ${pastPlans.length} past plan${pastPlans.length === 1 ? '' : 's'} match your question.` : 'Try a person’s name, or tap one of the quick questions.' };
+    const followUp = found.length || !person ? null : `After your next time with ${firstName}, write a few lines in Reflections and tag them — it will show up here.`;
+    return { ...base, verdict, memories, followUp };
   }
 
   // --- When: last and next time with this person ---
-  if (kind === 'when' && person) {
-    const last = personPastPlans[0];
-    const next = personPlans[0];
-    const summary = [
-      last ? `You last had a plan with ${personName} ${relativeDay(last.plan_date)}: "${last.title}" on ${fmtDate(last.plan_date)}.` : `There are no past plans with ${personName} in your saved data.`,
-      next ? `Your next plan together is "${next.title}" ${relativeDay(next.plan_date)}, on ${fmtDate(next.plan_date)} at ${next.plan_time.slice(0, 5)}.` : `Nothing is planned with ${personName} yet.`,
-    ].join(' ');
-    const memories = [...(next ? [planMemory(next)] : []), ...(last ? [planMemory(last)] : []), ...personReflections.slice(0, 1).map(reflectionMemory)];
+  if (kind === 'when' && insight) {
+    const { last, next } = insight;
+    const nextLine = next ? `Next up: "${next.title}" on ${fmtDate(next.plan_date)} at ${next.plan_time.slice(0, 5)}.` : `Nothing is planned with ${firstName} yet.`;
+    const verdict: Verdict = last
+      ? { tone: 'info', headline: `Last together ${relativeDay(last.plan_date)}`, reason: `"${last.title}" on ${fmtDate(last.plan_date)}. ${nextLine}` }
+      : next
+        ? { tone: 'info', headline: `Next together ${relativeDay(next.plan_date)}`, reason: `${nextLine} There are no past plans saved.` }
+        : { tone: 'info', headline: `No plans with ${firstName} yet`, reason: 'Nothing past or upcoming is saved.' };
     const followUp = next ? null : `Would you like to make time for ${firstName}? Add a plan when it feels right.`;
-    return { kind, summary, memories, followUp, ...empty };
+    return { ...base, verdict, followUp };
   }
 
-  const activeGoals = goals.filter((goal) => goal.status === 'active');
   const scheduleCount = upcoming.length;
-
   const reasonsToMeet: string[] = [];
   const reasonsToPostpone: string[] = [];
   const reasonsToGatherMore: string[] = [];
   const tradeoffs: string[] = [];
   const options: DecisionOption[] = [];
-  let recommendation: string | null = null;
+  let glance = base.glance;
+  let verdict: Verdict;
   let followUp: string | null = null;
 
   const contextParts: string[] = [];
 
-  if (person) {
+  if (person && insight) {
     contextParts.push(`${personName} is saved in your circle as "${person.relationship}".`);
     if (person.note) contextParts.push(`Your note about them: "${person.note}"`);
     if (person.detail) contextParts.push(`Context you saved: "${person.detail}"`);
-    if (personReflections.length) contextParts.push(`You have ${personReflections.length} reflection${personReflections.length === 1 ? '' : 's'} about ${firstName}; the most recent is from ${reflectionDate(personReflections[0])}.`);
-  }
-
-  if (personPlans.length) {
-    contextParts.push(`You have ${personPlans.length} upcoming plan${personPlans.length === 1 ? '' : 's'} with ${personName}: ${personPlans.map((plan) => `"${plan.title}" on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}`).join('; ')}.`);
-    personPlans.forEach((plan) => { if (plan.context) contextParts.push(`Plan context for "${plan.title}": "${plan.context}"`); });
-  }
-
-  if (personPastPlans.length) {
-    contextParts.push(`You have ${personPastPlans.length} past plan${personPastPlans.length === 1 ? '' : 's'} with ${personName}.`);
+    if (insight.reflections.length) contextParts.push(`You have ${insight.reflections.length} reflection${insight.reflections.length === 1 ? '' : 's'} about ${firstName}; the most recent is from ${reflectionDate(insight.reflections[0])}.`);
+    if (insight.upcoming.length) {
+      contextParts.push(`You have ${insight.upcoming.length} upcoming plan${insight.upcoming.length === 1 ? '' : 's'} with ${personName}: ${insight.upcoming.map((plan) => `"${plan.title}" on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}`).join('; ')}.`);
+    }
+    if (insight.past.length) contextParts.push(`You have ${insight.past.length} past plan${insight.past.length === 1 ? '' : 's'} with ${personName}.`);
   }
 
   if (matchedPlans.length && !person) {
@@ -206,7 +245,6 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   if (matchedGoals.length) {
     const goal = matchedGoals[0];
     contextParts.push(`This connects to your ${goal.status === 'active' ? 'active' : 'completed'} goal: "${goal.title}" (${goal.category}).`);
-    if (goal.description) contextParts.push(`Goal description: "${goal.description}"`);
   }
 
   if (activeGoals.length) {
@@ -218,151 +256,105 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   }
 
   // --- Person-centred decision ---
-  if (person) {
-    // Reasons to meet
-    if (personPlans.length) {
-      reasonsToMeet.push(`You already have "${personPlans[0].title}" planned with ${personName} on ${fmtDate(personPlans[0].plan_date)} — this plan already exists.`);
-    }
-    if (person.note) {
-      reasonsToMeet.push(`Your saved note about ${personName} — "${person.note}" — suggests there is something specific worth following up on.`);
-    }
-    if (!personPlans.length) {
-      reasonsToMeet.push(`${personName} has no upcoming plans in your calendar, so there may be room to add one.`);
-    }
-    if (matchedGoals.some((goal) => goal.category === 'Relationships' && goal.status === 'active')) {
-      reasonsToMeet.push(`You have an active Relationships goal: "${matchedGoals.find((goal) => goal.category === 'Relationships')?.title}" — meeting supports it.`);
+  if (person && insight) {
+    const soon = insight.upcoming.find((plan) => daysUntil(plan.plan_date) <= 3);
+    const weekCount = upcoming.filter((plan) => daysUntil(plan.plan_date) <= 7).length;
+    const restGoal = activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing');
+    const relationshipGoal = activeGoals.find((goal) => goal.category === 'Relationships');
+    const daysSince = insight.last ? -daysUntil(insight.last.plan_date) : null;
+    // A message or call does not take up an evening, so a busy week or rest goal should not count against it.
+    const lightTouch = /\b(reach out|message|call|text|check in)\b/.test(q);
+
+    // Each saved fact counts once for or against; the verdict follows whichever side has more.
+    if (daysSince !== null && daysSince >= 14 && !insight.next) reasonsToMeet.push(`It has been ${daysSince} days since your last plan together.`);
+    if (daysSince === null && !insight.next) reasonsToMeet.push(`You have nothing planned with ${firstName}, so there is room to reconnect.`);
+    if (insight.feeling?.tone === 'positive') reasonsToMeet.push(`Last time with ${firstName} felt good.`);
+    if (relationshipGoal) reasonsToMeet.push(`It supports your goal "${relationshipGoal.title}".`);
+    if (soon) reasonsToPostpone.push(`You are already seeing ${firstName} ${relativeDay(soon.plan_date)} ("${soon.title}").`);
+    if (weekCount >= 3 && !lightTouch) reasonsToPostpone.push(`You already have ${weekCount} plans in the next 7 days.`);
+    if (restGoal && !lightTouch) reasonsToPostpone.push(`You have a ${restGoal.category.toLowerCase()} goal: "${restGoal.title}".`);
+    if (insight.feeling?.tone === 'negative') reasonsToPostpone.push(`Last time with ${firstName} felt draining.`);
+
+    const score = reasonsToMeet.length - reasonsToPostpone.length;
+    if (score > 0) {
+      verdict = { tone: 'go', headline: lightTouch ? 'Yes — reach out' : 'Yes — go for it', reason: [reasonsToMeet[0], reasonsToPostpone[0] && `Just note: ${lowerFirst(reasonsToPostpone[0])}`].filter(Boolean).join(' ') };
+    } else if (score < 0) {
+      verdict = { tone: 'hold', headline: `Not ${when}`, reason: `${reasonsToPostpone[0]} ${soon ? 'Save your energy for that.' : `Suggest another time with ${firstName} instead.`}` };
+    } else {
+      verdict = { tone: 'maybe', headline: 'Maybe — check your energy', reason: reasonsToMeet.length ? `${reasonsToMeet[0]} But ${lowerFirst(reasonsToPostpone[0])}` : 'Nothing you have saved points strongly either way.' };
+      followUp = 'How is your energy right now? That should decide it.';
     }
 
-    // Reasons to postpone
-    if (scheduleCount >= 3) {
-      reasonsToPostpone.push(`You already have ${scheduleCount} upcoming plans. Adding another may spread your attention thin.`);
-    }
-    if (personPlans.length) {
-      reasonsToPostpone.push(`You already have a plan with ${personName} on ${fmtDate(personPlans[0].plan_date)}. Meeting again ${when} may be redundant.`);
-    }
-    if (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')) {
-      reasonsToPostpone.push(`You have an active ${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.category} goal: "${activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing')?.title}". Some time to yourself might serve that.`);
-    }
+    if (!person.note && !person.detail) reasonsToGatherMore.push(`You have not saved a note or context for ${personName}. Adding one would make this clearer.`);
+    reasonsToGatherMore.push(`Check how you feel ${when} — your saved data cannot tell you your current energy level.`);
 
-    // Reasons to gather more info
-    if (!person.note && !person.detail) {
-      reasonsToGatherMore.push(`You have not saved a note or context for ${personName}. Adding one would make this decision clearer.`);
-    }
-    reasonsToGatherMore.push(`Check how you feel physically and socially ${when} — your saved data cannot tell you your current energy level.`);
-
-    // Options with evidence
-    if (personPlans.length) {
-      options.push({ label: 'Keep the existing plan', detail: `You already have "${personPlans[0].title}" with ${personName} on ${fmtDate(personPlans[0].plan_date)} at ${personPlans[0].plan_time.slice(0, 5)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${personPlans[0].title}" on ${personPlans[0].plan_date} at ${personPlans[0].plan_time}.` });
+    const nextPlan = insight.next;
+    if (nextPlan) {
+      options.push({ label: 'Keep the existing plan', detail: `You already have "${nextPlan.title}" with ${personName} on ${fmtDate(nextPlan.plan_date)} at ${nextPlan.plan_time.slice(0, 5)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${nextPlan.title}" on ${nextPlan.plan_date} at ${nextPlan.plan_time}.` });
     } else {
       options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your week.`, evidence: `${personName} has no upcoming plans in your saved data.` });
     }
-    options.push({ label: 'Postpone and protect your time', detail: `Hold off and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: scheduleCount >= 3 ? `You have ${scheduleCount} upcoming plans already.` : `No specific plan with ${personName} would be disrupted.` });
+    options.push({ label: 'Postpone and protect your time', detail: `Hold off and rest. You can reach out to ${personName} when your schedule and energy feel steadier.`, evidence: weekCount >= 3 ? `You have ${weekCount} plans in the next 7 days.` : `No specific plan with ${personName} would be disrupted.` });
 
-    // Trade-offs
     tradeoffs.push(`Meeting ${when} sustains closeness, but if your energy is low it may not feel meaningful to either of you.`);
-    tradeoffs.push('Postponing protects your energy, but delays the follow-through your note suggests matters.');
-    if (personPlans.length) tradeoffs.push('Adding a second plan so close to an existing one may dilute the quality of both.');
-
-    // Recommendation logic
-    const meetSignal = (person.note ? 1 : 0) + (matchedGoals.some((goal) => goal.category === 'Relationships') ? 1 : 0) + (personPlans.length ? 1 : 0);
-    const postponeSignal = (scheduleCount >= 3 ? 1 : 0) + (activeGoals.some((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing') ? 1 : 0) + (personPlans.length ? 1 : 0);
-
-    if (meetSignal >= 2 && postponeSignal <= 1) {
-      recommendation = `Based on your saved notes and goals, meeting ${personName} seems well-supported — but only if your energy ${when} can hold it. If not, postponing is a reasonable choice.`;
-    } else if (postponeSignal >= 2 && meetSignal <= 1) {
-      recommendation = `Your saved plans and goals suggest your time might be better spent resting. Consider reaching out to ${personName} to set something up for later this week instead.`;
-    } else {
-      recommendation = null;
-      followUp = `What is your energy like right now? Your saved data does not capture how today has felt, and that matters as much as the plans and notes here.`;
-    }
+    tradeoffs.push('Postponing protects your energy, but delays time together.');
+    if (nextPlan) tradeoffs.push('Adding a second plan so close to an existing one may dilute the quality of both.');
 
   // --- Plan-centred decision (no person matched) ---
   } else if (matchedPlans.length) {
     const plan = matchedPlans[0];
-    const linkedPerson = people.find((person) => person.id === plan.person_id);
+    const linkedPerson = people.find((item) => item.id === plan.person_id);
+    glance = linkedPerson
+      ? glanceFor(personInsight(linkedPerson, plans, reflections))
+      : [{ label: 'When', value: `${fmtDate(plan.plan_date)} · ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}` }, { label: 'Category', value: plan.category }];
+
+    if (!isUpcoming(plan)) {
+      verdict = { tone: 'info', headline: 'That plan has already passed', reason: `"${plan.title}" was ${relativeDay(plan.plan_date)}, on ${fmtDate(plan.plan_date)}.` };
+    } else if (plan.context) {
+      verdict = { tone: 'go', headline: 'Yes — keep the plan', reason: `It is ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}, and you saved it with intention: "${plan.context}"` };
+    } else {
+      verdict = { tone: 'maybe', headline: 'Probably — if it still feels right', reason: `"${plan.title}" is ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}. You did not save why it matters.` };
+      followUp = `What has changed since you saved "${plan.title}"? If it still feels right, keep it.`;
+    }
 
     reasonsToMeet.push(`"${plan.title}" is already saved for ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}.`);
     if (plan.context) reasonsToMeet.push(`Your saved context: "${plan.context}"`);
     if (linkedPerson) reasonsToMeet.push(`This plan is linked to ${linkedPerson.name}.`);
-
-    reasonsToPostpone.push(`The plan is set for ${fmtDate(plan.plan_date)} — meeting ${when} would be in addition to, not instead of, that.`);
     if (scheduleCount >= 3) reasonsToPostpone.push(`You have ${scheduleCount} upcoming plans already.`);
-
-    if (!plan.context) reasonsToGatherMore.push(`This plan has no saved context. Adding one would clarify whether the timing fits.`);
-    reasonsToGatherMore.push(`Check whether anything else on your calendar conflicts.`);
+    if (!plan.context) reasonsToGatherMore.push('This plan has no saved context. Adding one would clarify whether the timing fits.');
+    reasonsToGatherMore.push('Check whether anything else on your calendar conflicts.');
 
     options.push({ label: 'Go ahead with the saved plan', detail: `"${plan.title}" is already on your calendar for ${fmtDate(plan.plan_date)}. Trust the intention you captured.`, evidence: `Saved plan: "${plan.title}" on ${plan.plan_date} at ${plan.plan_time}.` });
-    options.push({ label: 'Reconsider the timing', detail: `Review whether the current slot competes with a rest or wellbeing goal before confirming.`, evidence: activeGoals.length ? `Active goals: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.` : `No active goals saved.` });
+    options.push({ label: 'Reconsider the timing', detail: 'Review whether the current slot competes with a rest or wellbeing goal before confirming.', evidence: activeGoals.length ? `Active goals: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.` : 'No active goals saved.' });
 
     tradeoffs.push('Following through on a saved plan builds trust with yourself.');
     tradeoffs.push('Adjusting now is easier than dragging through a plan that no longer fits.');
 
-    if (linkedPerson && plan.context) {
-      recommendation = `Your saved context for "${plan.title}" suggests the plan is intentional. Unless something has shifted today, keeping it seems reasonable.`;
-    } else {
-      recommendation = null;
-      followUp = `What has changed since you saved "${plan.title}"? If the context still feels right, keeping the plan makes sense.`;
-    }
-
   // --- Goal-centred decision ---
   } else if (matchedGoals.length) {
     const goal = matchedGoals[0];
+    verdict = goal.status === 'active'
+      ? { tone: 'go', headline: 'Yes — take one small step', reason: `It moves your goal "${goal.title}" forward without overcommitting your week.` }
+      : { tone: 'info', headline: 'You already completed this goal', reason: `"${goal.title}" is marked as completed.` };
+    if (goal.status === 'active' && !goal.description) followUp = `What would one small step toward "${goal.title}" look like?`;
 
-    if (goal.status === 'active') {
-      reasonsToMeet.push(`Your active goal "${goal.title}" (${goal.category}) could benefit from a concrete step this week.`);
-      if (goal.description) reasonsToMeet.push(`Goal description: "${goal.description}"`);
-    }
+    if (goal.status === 'active') reasonsToMeet.push(`Your active goal "${goal.title}" (${goal.category}) could benefit from a concrete step this week.`);
     reasonsToPostpone.push(`"${goal.title}" is a monthly goal — there is time, and not every day needs to advance it.`);
-    reasonsToGatherMore.push(`Consider which specific action would move "${goal.title}" forward before committing.`);
+    options.push({ label: 'Take a small step toward it', detail: `Choose one concrete action this week that moves "${goal.title}" forward.`, evidence: `Goal: "${goal.title}" in ${goal.category}.` });
+    options.push({ label: 'Pause and revisit', detail: 'Let the goal sit if your attention is needed elsewhere right now.', evidence: 'Monthly goal — no immediate deadline in your saved data.' });
 
-    options.push({ label: 'Take a small step toward it', detail: `Choose one concrete action this week that moves "${goal.title}" forward.`, evidence: `Active goal: "${goal.title}" in ${goal.category}.` });
-    options.push({ label: 'Pause and revisit', detail: `Let the goal sit if your attention is needed elsewhere right now.`, evidence: `Monthly goal — no immediate deadline in your saved data.` });
-
-    tradeoffs.push('A small step sustains momentum without overwhelming your week.');
-    tradeoffs.push('Pausing avoids overcommitting but risks losing the thread of the goal.');
-
-    if (goal.status === 'active' && goal.description) {
-      recommendation = `Your goal "${goal.title}" has a description, which suggests you have thought about it. A small step ${when} could be worthwhile if your time is otherwise open.`;
-    } else {
-      recommendation = null;
-      followUp = `What would a "small step" toward "${goal.title}" look like concretely? Deciding that first would make this choice clearer.`;
-    }
-
-  // --- No match, but upcoming plans exist ---
-  } else if (upcoming.length) {
-    contextParts.push(`No saved person, plan, or goal matched your question. Your next upcoming plan is "${upcoming[0].title}" on ${fmtDate(upcoming[0].plan_date)}.`);
-
-    reasonsToGatherMore.push(`No saved data matched this question. Try searching by a person's name or a plan title.`);
-    reasonsToGatherMore.push(`Consider whether this question relates to someone or something not yet in your saved data.`);
-
-    options.push({ label: 'Focus on your next plan', detail: `"${upcoming[0].title}" is coming up on ${fmtDate(upcoming[0].plan_date)}.`, evidence: `Next upcoming plan: "${upcoming[0].title}".` });
-    options.push({ label: 'Add context first', detail: `Add a person or plan related to this question so future decisions can draw on it.`, evidence: `No match found for: "${query}".` });
-
-    tradeoffs.push('Acting on what is already planned keeps your commitments intact.');
-    tradeoffs.push('Pausing to add context now makes future decisions sharper.');
-
-    recommendation = null;
-    followUp = `Who or what is this question about? Try adding them to your People or Plans so the decision has something to work with.`;
+  // --- Nothing matched ---
+  } else if (people.length || plans.length) {
+    verdict = { tone: 'info', headline: 'I could not find that yet', reason: 'Nothing you have saved matches this question. Try a person’s name, or tap one of the quick questions.' };
+    followUp = 'Is this about someone new? Add them to People so Kinly can help next time.';
+    if (upcoming.length) contextParts.push(`Your next upcoming plan is "${upcoming[0].title}" on ${fmtDate(upcoming[0].plan_date)}.`);
 
   // --- No data at all ---
   } else {
-    contextParts.push('You have no saved people, plans, or goals yet. There is nothing in your workspace for this question to draw on.');
-
-    reasonsToGatherMore.push('No saved people, plans, or goals exist yet. Adding even one would give this decision shape.');
-
-    options.push({ label: 'Add a person', detail: 'Name someone who is on your mind so future decisions can include them.', evidence: 'No people saved yet.' });
-    options.push({ label: 'Add a plan', detail: 'Capture one intention for the week so you can weigh competing choices.', evidence: 'No plans saved yet.' });
-
-    tradeoffs.push('Adding structure now makes later decisions clearer.');
-    tradeoffs.push('Staying open avoids premature commitment but keeps things vague.');
-
-    recommendation = null;
-    followUp = `Who is this question about? Start by adding them as a person — then ask again.`;
+    verdict = { tone: 'info', headline: 'Nothing saved yet', reason: 'Add a person or a plan first, then ask again.' };
   }
 
-  const summary = contextParts.join(' ');
-
-  return { kind, summary, memories: personReflections.slice(0, 2).map(reflectionMemory), options, reasonsToMeet, reasonsToPostpone, reasonsToGatherMore, tradeoffs, recommendation, followUp, matchedPeople, matchedPlans };
+  return { ...base, kind, verdict, glance, summary: contextParts.join(' '), memories: insight ? insight.reflections.slice(0, 2).map(reflectionMemory) : [], options, reasonsToMeet, reasonsToPostpone, reasonsToGatherMore, tradeoffs, followUp };
 }
 
 const navigation: { id: Page; label: string; icon: typeof Home }[] = [
@@ -391,7 +383,7 @@ const collectionKeys = Object.keys(collectionFields) as CollectionKey[];
 const isValidItem = (item: unknown, fields: string[]) => !!item && typeof item === 'object' && fields.every((field) => typeof (item as Record<string, unknown>)[field] === 'string');
 const shortcutLabel =/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
-function Avatar({ person, size = 'md' }: { person: Person; size?: 'sm' | 'md' | 'lg' }) {
+function Avatar({ person, size = 'md' }: { person: Person; size?: 'xs' | 'sm' | 'md' | 'lg' }) {
   return <div className={`avatar avatar-${size}`} style={{ backgroundColor: person.color }} aria-label={person.name}>{person.initials}</div>;
 }
 
@@ -425,7 +417,7 @@ function App() {
     setPlans(readLocalCollection<Plan>('plans', seedPlans));
     setGoals(readLocalCollection<Goal>('goals', []));
     const seedReflections: Reflection[] = [
-      { id: 'coffee-with-maya-reflection', text: 'Coffee with Maya reminded me that she needs room to think out loud before she wants suggestions. Next time, ask how the studio move is going and just listen.', created_at: new Date(Date.now() - 9 * 86400000).toISOString(), person_id: mayaId },
+      { id: 'coffee-with-maya-reflection', text: 'Coffee with Maya felt warm and easy. She needs room to think out loud before she wants suggestions. Next time, ask how the studio move is going and just listen.', created_at: new Date(Date.now() - 9 * 86400000).toISOString(), person_id: mayaId },
     ];
     setReflections(readLocalCollection<Reflection>('reflections', seedReflections));
     setLoading(false);
@@ -612,7 +604,7 @@ function App() {
         <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} /><strong>{navigation.find((item) => item.id === page)?.label}</strong></div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar">JL</div></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} onAddPerson={() => openModal('person')} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} onAddPerson={() => openModal('person')} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
@@ -627,10 +619,43 @@ function App() {
   );
 }
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate, onAddPerson, onAddPlan, questionRef, people, plans, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; navigate: (page: Page) => void; onAddPerson: () => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; goals: Goal[] }) {
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onSubmitQuestion(); };
+// Ready-made questions built from what is saved, so asking takes a single tap.
+function buildQuickQuestions(people: Person[], plans: Plan[], reflections: Reflection[]): string[] {
+  const byId = (id?: string | null) => people.find((person) => person.id === id);
+  const first = (person: Person) => person.name.split(' ')[0];
+  const upcoming = plans.filter(isUpcoming).sort(bySoonest);
+  const questions: string[] = [];
+  const nextPlan = upcoming[0];
+  if (nextPlan) questions.push(`Should I go to ${nextPlan.title}?`);
+  const reflected = byId([...reflections].sort(byNewest).find((reflection) => byId(reflection.person_id))?.person_id);
+  if (reflected) questions.push(`How did it go with ${first(reflected)} last time?`);
+  const quiet = people.find((person) => !upcoming.some((plan) => plan.person_id === person.id));
+  if (quiet) questions.push(`Should I reach out to ${first(quiet)}?`);
+  const nextPerson = byId(upcoming.find((plan) => byId(plan.person_id) && plan.person_id !== nextPlan?.person_id)?.person_id);
+  if (nextPerson) questions.push(`When am I next seeing ${first(nextPerson)}?`);
+  return questions;
+}
+
+const questionsAbout = (person: Person) => {
+  const first = person.name.split(' ')[0];
+  return [`Should I meet ${first}?`, `How did it go with ${first} last time?`, `When did I last see ${first}?`];
+};
+
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate, onAddPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; navigate: (page: Page) => void; onAddPerson: () => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const focusPerson = people.find((person) => person.id === focusId);
+  const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (question.trim()) onSubmitQuestion(); };
+  const ask = (prompt: string) => { setQuestion(prompt); onSubmitQuestion(prompt); };
+  const askSection = <section className="ask-section">
+    <div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div>
+    <form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="e.g. Should I meet Maya tonight?" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd><button type="submit" className="ask-button" disabled={!question.trim()}>Ask</button></form>
+    {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
+    <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
+    {decision && <DecisionPanel decision={decision} onClear={() => setQuestion('')} />}
+  </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">A MOMENT TO CONSIDER</span><h2>What would feel nourishing today?</h2><p>You have some open space this evening. Notice what your energy is asking for before you fill it.</p></div><button className="text-button" onClick={() => navigate('reflections')}>Reflect for a minute <ArrowUpRight size={15} /></button></section><section className="ask-section"><div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div><form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about a person or plan…" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd></form><div className="prompt-list">{prompts.map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => { setQuestion(prompt); onSubmitQuestion(prompt); }}>{prompt}<ArrowUpRight size={14} /></button>)}</div>{decision && <DecisionPanel decision={decision} />}</section><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => navigate('people')}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">A MOMENT TO CONSIDER</span><h2>What would feel nourishing today?</h2><p>You have some open space this evening. Notice what your energy is asking for before you fill it.</p></div><button className="text-button" onClick={() => navigate('reflections')}>Reflect for a minute <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => navigate('people')}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
 }
 
 function SummaryStat({ label, value, icon, onClick }: { label: string; value: number; icon: React.ReactNode; onClick: () => void }) { return <button className="summary-stat" onClick={onClick}><span className="summary-stat-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span><ArrowUpRight size={14} /></button>; }
@@ -647,19 +672,29 @@ function GoalsPage({ goals, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]
 
 function EmptyInline({ text, action, onClick }: { text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span>{text}</span><button className="card-link" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
-function DecisionPanel({ decision }: { decision: NonNullable<DecisionResult> }) {
-  return <div className="decision-panel">
-    <div className="decision-header"><span className="card-kicker">{decision.kind === 'recall' ? 'LOOKING BACK — FROM YOUR SAVED DATA' : decision.kind === 'when' ? 'YOUR TIME TOGETHER — FROM YOUR SAVED DATA' : 'DECISION SUPPORT — FROM YOUR SAVED DATA'}</span><p className="decision-summary">{decision.summary}</p></div>
-    {decision.matchedPeople.length > 0 && <div className="decision-match"><Users size={14} /><span>Related: {decision.matchedPeople.map((p) => p.name).join(', ')}</span></div>}
-    {decision.matchedPlans.length > 0 && <div className="decision-match"><CalendarDays size={14} /><span>Related plans: {decision.matchedPlans.map((p) => p.title).join(', ')}</span></div>}
-    {decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">WHAT YOU SAVED</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>}
-    {decision.options.length > 0 && <div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p><span className="decision-evidence">{option.evidence}</span></div>)}</div>}
-    {decision.reasonsToMeet.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO MEET / GO AHEAD</span><ul>{decision.reasonsToMeet.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
-    {decision.reasonsToPostpone.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO POSTPONE</span><ul>{decision.reasonsToPostpone.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
-    {decision.reasonsToGatherMore.length > 0 && <div className="decision-reasons"><span className="card-kicker">GATHER MORE INFORMATION</span><ul>{decision.reasonsToGatherMore.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
-    {decision.tradeoffs.length > 0 && <div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div>}
-    {decision.recommendation && <div className="decision-next"><Sparkles size={15} /><span><strong>Tentative recommendation: </strong>{decision.recommendation}</span></div>}
+function DecisionPanel({ decision, onClear }: { decision: NonNullable<DecisionResult>; onClear: () => void }) {
+  const { verdict } = decision;
+  const kicker = decision.kind === 'recall' ? 'LOOKING BACK' : decision.kind === 'when' ? 'YOUR TIME TOGETHER' : 'YOUR ANSWER';
+  // Recall questions are answered by the saved memories themselves, so show them up front.
+  const memoriesFirst = decision.kind === 'recall';
+  const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">WHAT YOU SAVED</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
+  const hasDetails = Boolean(decision.summary || (!memoriesFirst && decision.memories.length) || decision.options.length || decision.reasonsToMeet.length || decision.reasonsToPostpone.length || decision.reasonsToGatherMore.length || decision.tradeoffs.length);
+  return <div className={`decision-panel tone-${verdict.tone}`} aria-live="polite">
+    <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
+    {decision.glance.length > 0 && <dl className="decision-glance">{decision.glance.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
+    {memoriesFirst && memories}
+    {hasDetails && <details className="decision-details"><summary>See the full reasoning <ChevronRight size={14} /></summary>
+      {decision.summary && <p className="decision-summary">{decision.summary}</p>}
+      {decision.matchedPeople.length > 0 && <div className="decision-match"><Users size={14} /><span>Related: {decision.matchedPeople.map((p) => p.name).join(', ')}</span></div>}
+      {decision.matchedPlans.length > 0 && <div className="decision-match"><CalendarDays size={14} /><span>Related plans: {decision.matchedPlans.map((p) => p.title).join(', ')}</span></div>}
+      {!memoriesFirst && memories}
+      {decision.options.length > 0 && <div className="decision-options">{decision.options.map((option) => <div className="decision-option" key={option.label}><strong>{option.label}</strong><p>{option.detail}</p><span className="decision-evidence">{option.evidence}</span></div>)}</div>}
+      {decision.reasonsToMeet.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO GO AHEAD</span><ul>{decision.reasonsToMeet.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+      {decision.reasonsToPostpone.length > 0 && <div className="decision-reasons"><span className="card-kicker">REASONS TO HOLD OFF</span><ul>{decision.reasonsToPostpone.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+      {decision.reasonsToGatherMore.length > 0 && <div className="decision-reasons"><span className="card-kicker">WORTH CHECKING</span><ul>{decision.reasonsToGatherMore.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+      {decision.tradeoffs.length > 0 && <div className="decision-tradeoffs"><span className="card-kicker">TRADE-OFFS</span><ul>{decision.tradeoffs.map((tradeoff) => <li key={tradeoff}>{tradeoff}</li>)}</ul></div>}
+    </details>}
   </div>;
 }
 

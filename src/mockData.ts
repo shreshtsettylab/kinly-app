@@ -72,9 +72,3 @@ export const upcomingPlans = [
   { id: 2, title: 'Walk in Prospect Park', person: 'Arjun Mehta', date: 'Saturday', time: '10:30 AM', kind: 'Wellbeing' },
   { id: 3, title: 'Project catch-up', person: 'Elena Rossi', date: 'Monday', time: '2:00 PM', kind: 'Work' },
 ];
-
-export const prompts = [
-  'Should I meet Arjun tonight?',
-  'What did I learn from my last meeting with Maya?',
-  'When am I next seeing Elena?',
-];
