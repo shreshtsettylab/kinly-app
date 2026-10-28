@@ -39,8 +39,9 @@ type Glance = { label: string; value: string };
 type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reason: string };
 type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
 type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling };
+type Energy = 'low' | 'okay' | 'good' | null;
 type DecisionResult = {
-  kind: 'decide' | 'recall' | 'when';
+  kind: 'decide' | 'recall' | 'when' | 'cancel' | 'talk' | 'who';
   verdict: Verdict;
   glance: Glance[];
   summary: string;
@@ -153,11 +154,15 @@ function glanceFor({ last, next, feeling }: PersonInsight): Glance[] {
   ];
 }
 
-function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[]): DecisionResult {
+function buildDecision(query: string, people: Person[], plans: Plan[], goals: Goal[], reflections: Reflection[], energy: Energy = null): DecisionResult {
   const q = query.toLowerCase().trim();
   if (!q) return null;
-  // "Should I…" is always a decision; otherwise look for recall ("how did it go") or timing ("when") questions.
-  const kind: NonNullable<DecisionResult>['kind'] = /\b(should|shall|worth)\b/.test(q) ? 'decide'
+  // Specific intents first (cancel, talking points, who to contact); then "Should I…" decisions,
+  // recall ("how did it go") and timing ("when") questions.
+  const kind: NonNullable<DecisionResult>['kind'] = /\b(cancel|skip|bail|reschedule|call off)\b/.test(q) ? 'cancel'
+    : /\b(talk about|bring up|conversation|discuss|say to|topics?)\b/.test(q) ? 'talk'
+      : /\bwho\b/.test(q) ? 'who'
+        : /\b(should|shall|worth)\b/.test(q) ? 'decide'
     : /\b(learn|learned|learnt|remember|recall|notes?|reflect\w*|happened|how did|how was)\b/.test(q) ? 'recall'
       : /\b(when|how long)\b/.test(q) ? 'when' : 'decide';
   const when = /\btonight\b/.test(q) ? 'tonight' : /\btoday\b/.test(q) ? 'today' : /\btomorrow\b/.test(q) ? 'tomorrow' : /\bweekend\b/.test(q) ? 'this weekend' : 'right now';
@@ -219,6 +224,68 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     return { ...base, verdict, followUp };
   }
 
+  const weekCount = upcoming.filter((plan) => daysUntil(plan.plan_date) <= 7).length;
+  const restGoal = activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing');
+
+  // --- Cancel: should I keep or reschedule a plan? ---
+  if (kind === 'cancel') {
+    const target = insight?.next || matchedPlans.filter(isUpcoming).sort(bySoonest)[0];
+    if (!target) return { ...base, verdict: { tone: 'info', headline: 'Nothing to cancel', reason: person ? `There is no upcoming plan with ${firstName}.` : 'No upcoming plan matches your question.' } };
+    const withPerson = people.find((item) => item.id === target.person_id);
+    const targetInsight = withPerson ? personInsight(withPerson, plans, reflections) : null;
+    const who = withPerson ? withPerson.name.split(' ')[0] : '';
+    const keep: string[] = [];
+    const drop: string[] = [];
+    if (target.context) keep.push(`You saved it with intention: "${target.context}"`);
+    if (targetInsight?.feeling?.tone === 'positive') keep.push(`Last time with ${who} felt good.`);
+    if (daysUntil(target.plan_date) === 0) keep.push('It is today, so cancelling now may land hard.');
+    if (energy === 'good') keep.push('You said your energy is good.');
+    if (energy === 'low') drop.push('You said your energy is low.');
+    if (weekCount >= 4) drop.push(`You have ${weekCount} plans in the next 7 days.`);
+    if (restGoal) drop.push(`You have a ${restGoal.category.toLowerCase()} goal: "${restGoal.title}".`);
+    if (targetInsight?.feeling?.tone === 'negative') drop.push(`Last time with ${who} felt draining.`);
+    const score = keep.length - drop.length;
+    const verdict: Verdict = score > 0
+      ? { tone: 'go', headline: 'Keep the plan', reason: `"${target.title}" is ${relativeDay(target.plan_date)} at ${fmtTime(target.plan_time)}. ${keep[0]}` }
+      : score < 0
+        ? { tone: 'hold', headline: 'Okay to reschedule', reason: `${drop[0]} Let ${who || 'them'} know early and suggest another time.` }
+        : { tone: 'maybe', headline: 'Keep it, but make it lighter', reason: `Rather than cancelling, suggest a shorter version of "${target.title}". Showing up briefly still counts.` };
+    return { ...base, glance: targetInsight ? glanceFor(targetInsight) : [{ label: 'When', value: `${fmtDate(target.plan_date)} at ${fmtTime(target.plan_time)}` }], verdict, reasonsToMeet: keep, reasonsToPostpone: drop, followUp: score === 0 && !energy ? 'How is your energy? Tap Low, Okay or Good above for a clearer answer.' : null };
+  }
+
+  // --- Talk: what could I bring up with this person? ---
+  if (kind === 'talk' && person && insight) {
+    const ideas: Memory[] = [];
+    if (person.note) ideas.push({ label: 'From your note', date: '', text: person.note });
+    if (insight.next?.context) ideas.push({ label: `For ${insight.next.title}`, date: relativeDay(insight.next.plan_date), text: insight.next.context });
+    insight.reflections.slice(0, 3).forEach((reflection) => {
+      const sentence = reflection.text.split(/(?<=[.!?])\s+/).find((line) => /\b(next time|ask|follow up|remember|mention|check)\b/i.test(line));
+      if (sentence) ideas.push({ label: 'From your reflection', date: reflectionDate(reflection), text: sentence.trim() });
+    });
+    if (insight.last) ideas.push({ label: 'An easy opener', date: '', text: '“How have things been since we last caught up?”' });
+    ideas.push({ label: 'A gentle question', date: '', text: '“What has been taking up most of your energy lately?” Then listen more than you advise.' });
+    return { ...base, verdict: { tone: 'info', headline: `Ideas for your next talk with ${firstName}`, reason: person.note ? 'Start with what you noted — it shows you remembered.' : 'Drawn from what you have saved, plus a couple of open questions.' }, memories: ideas.slice(0, 5) };
+  }
+
+  // --- Who: which person in my circle could use some attention? ---
+  if (kind === 'who') {
+    const ranked = people
+      .map((item) => ({ person: item, insight: personInsight(item, plans, reflections) }))
+      .filter((entry) => !entry.insight.next)
+      .map((entry) => ({ ...entry, days: entry.insight.last ? -daysUntil(entry.insight.last.plan_date) : null }))
+      .sort((a, b) => {
+        // Longest gap first; warm connections get a nudge up, draining ones a nudge down.
+        const weight = (entry: typeof a) => (entry.days ?? 30) + (entry.insight.feeling?.tone === 'positive' ? 14 : 0) - (entry.insight.feeling?.tone === 'negative' ? 14 : 0);
+        return weight(b) - weight(a);
+      });
+    const top = ranked[0];
+    if (!top) return { ...base, verdict: { tone: 'info', headline: 'Everyone has something planned', reason: 'You already have an upcoming plan with each person in your circle.' } };
+    const name = top.person.name.split(' ')[0];
+    const verdict: Verdict = { tone: 'go', headline: `Reach out to ${name}`, reason: top.days !== null ? `It has been ${top.days} days since your last plan together${top.insight.feeling?.tone === 'positive' ? ', and last time felt good' : ''}. A short message is enough.` : `You have nothing saved with ${name} yet — a short message is an easy start.` };
+    const glance = ranked.slice(0, 3).map(({ person: item, insight: itemInsight, days }) => ({ label: item.name, value: days !== null ? `Last together ${days} days ago${itemInsight.feeling ? ` · ${lowerFirst(itemInsight.feeling.label)}` : ''}` : 'No time together saved yet' }));
+    return { ...base, verdict, glance, matchedPeople: ranked.slice(0, 3).map((entry) => entry.person) };
+  }
+
   const scheduleCount = upcoming.length;
   const reasonsToMeet: string[] = [];
   const reasonsToPostpone: string[] = [];
@@ -264,8 +331,6 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   // --- Person-centred decision ---
   if (person && insight) {
     const soon = insight.upcoming.find((plan) => daysUntil(plan.plan_date) <= 3);
-    const weekCount = upcoming.filter((plan) => daysUntil(plan.plan_date) <= 7).length;
-    const restGoal = activeGoals.find((goal) => goal.category === 'Rest' || goal.category === 'Wellbeing');
     const relationshipGoal = activeGoals.find((goal) => goal.category === 'Relationships');
     const daysSince = insight.last ? -daysUntil(insight.last.plan_date) : null;
     // A message or call does not take up an evening, so a busy week or rest goal should not count against it.
@@ -280,6 +345,8 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (weekCount >= 3 && !lightTouch) reasonsToPostpone.push(`You already have ${weekCount} plans in the next 7 days.`);
     if (restGoal && !lightTouch) reasonsToPostpone.push(`You have a ${restGoal.category.toLowerCase()} goal: "${restGoal.title}".`);
     if (insight.feeling?.tone === 'negative') reasonsToPostpone.push(`Last time with ${firstName} felt draining.`);
+    if (energy === 'good' && !lightTouch) reasonsToMeet.push('You said your energy is good.');
+    if (energy === 'low' && !lightTouch) reasonsToPostpone.push('You said your energy is low.');
 
     const score = reasonsToMeet.length - reasonsToPostpone.length;
     if (score > 0) {
@@ -287,8 +354,8 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     } else if (score < 0) {
       verdict = { tone: 'hold', headline: `Not ${when}`, reason: `${reasonsToPostpone[0]} ${soon ? 'Save your energy for that.' : `Suggest another time with ${firstName} instead.`}` };
     } else {
-      verdict = { tone: 'maybe', headline: 'Maybe — check your energy', reason: reasonsToMeet.length ? `${reasonsToMeet[0]} But ${lowerFirst(reasonsToPostpone[0])}` : 'Nothing you have saved points strongly either way.' };
-      followUp = 'How is your energy right now? That should decide it.';
+      verdict = { tone: 'maybe', headline: energy ? 'Either way is fine — your call' : 'Maybe — check your energy', reason: reasonsToMeet.length ? `${reasonsToMeet[0]} But ${lowerFirst(reasonsToPostpone[0])}` : 'Nothing you have saved points strongly either way.' };
+      followUp = energy ? null : 'How is your energy right now? Tap Low, Okay or Good above for a clearer answer.';
     }
 
     if (!person.note && !person.detail) reasonsToGatherMore.push(`You have not saved a note or context for ${personName}. Adding one would make this clearer.`);
@@ -409,6 +476,7 @@ function App() {
   const [search, setSearch] = useState('');
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
+  const [energy, setEnergy] = useState<Energy>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -603,7 +671,7 @@ function App() {
   };
 
   const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
-  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections), [submittedQuestion, people, plans, goals, reflections]);
+  const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, energy), [submittedQuestion, people, plans, goals, reflections, energy]);
 
   const openModal = (type: Modal, id: string | null = null) => { setModal(type); setEditingId(id); setError(''); setPresetPersonId(null); };
   const openPlanFor = (id: string) => { openModal('plan'); setPresetPersonId(id); };
@@ -635,7 +703,7 @@ function App() {
         <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar" aria-hidden="true">{initialsOf(profileName) || '·'}</div></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} energy={energy} setEnergy={setEnergy} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
@@ -663,7 +731,7 @@ function buildQuickQuestions(people: Person[], plans: Plan[], reflections: Refle
   const reflected = byId([...reflections].sort(byNewest).find((reflection) => byId(reflection.person_id))?.person_id);
   if (reflected) questions.push(`How did it go with ${first(reflected)} last time?`);
   const quiet = people.find((person) => !upcoming.some((plan) => plan.person_id === person.id));
-  if (quiet) questions.push(`Should I reach out to ${first(quiet)}?`);
+  if (quiet) questions.push('Who should I reach out to this week?');
   const nextPerson = byId(upcoming.find((plan) => byId(plan.person_id) && plan.person_id !== nextPlan?.person_id)?.person_id);
   if (nextPerson) questions.push(`When am I next seeing ${first(nextPerson)}?`);
   return questions;
@@ -707,12 +775,19 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[])
   };
 }
 
-const questionsAbout = (person: Person) => {
+const questionsAbout = (person: Person, hasPlan = false) => {
   const first = person.name.split(' ')[0];
-  return [`Should I meet ${first}?`, `How did it go with ${first} last time?`, `When did I last see ${first}?`];
+  return [
+    `Should I meet ${first}?`,
+    `How did it go with ${first} last time?`,
+    `What should I talk about with ${first}?`,
+    hasPlan ? `Should I cancel on ${first}?` : `When did I last see ${first}?`,
+  ];
 };
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
+
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, energy, setEnergy, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; energy: Energy; setEnergy: (value: Energy) => void; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
@@ -728,11 +803,38 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate,
     <div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div>
     <form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="e.g. Should I meet Maya tonight?" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd><button type="submit" className="ask-button" disabled={!question.trim()}>Ask</button></form>
     {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
-    <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
+    <div className="energy-row" role="group" aria-label="Your energy right now"><span className="ask-label">Your energy right now</span>{energyLevels.map((level) => <button type="button" key={level.value} className={`energy-option ${energy === level.value ? 'energy-active' : ''}`} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div>
+    <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
     {decision && <DecisionPanel decision={decision} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} onOpenPerson={onOpenPerson} /><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+}
+
+// A monthly read on the circle: who you saw, who feels good to be around, who may be drifting.
+function CircleInsights({ people, plans, reflections, onOpenPerson }: { people: Person[]; plans: Plan[]; reflections: Reflection[]; onOpenPerson: (id: string) => void }) {
+  const month = localDateKey().slice(0, 7);
+  const monthName = new Date().toLocaleDateString('en-US', { month: 'long' });
+  const entries = people.map((person) => ({ person, insight: personInsight(person, plans, reflections) }));
+  const seen = entries.filter(({ insight }) => insight.past.some((plan) => plan.plan_date.startsWith(month)));
+  const feelsGood = entries.filter(({ insight }) => insight.feeling?.tone === 'positive');
+  const drifting = entries
+    .filter(({ insight }) => !insight.next && (!insight.last || -daysUntil(insight.last.plan_date) >= 21))
+    .map((entry) => ({ ...entry, days: entry.insight.last ? -daysUntil(entry.insight.last.plan_date) : null }))
+    .sort((a, b) => (b.days ?? 999) - (a.days ?? 999));
+  const recent = reflections.filter((reflection) => Date.now() - new Date(reflection.created_at).getTime() <= 30 * 86400000).map(feelingOf);
+  const count = (tone: Feeling['tone']) => recent.filter((feeling) => feeling.tone === tone).length;
+  const chip = (person: Person, detail?: string) => <button key={person.id} className="insight-person" onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="xs" /><span>{person.name.split(' ')[0]}</span>{detail && <small>{detail}</small>}</button>;
+  if (!people.length) return null;
+  return <section className="content-card circle-insights">
+    <div className="card-header"><div><span className="card-kicker">YOUR CIRCLE IN {monthName.toUpperCase()}</span><h2>How your connections are going</h2></div></div>
+    <div className="insight-grid">
+      <div className="insight-col"><span className="insight-label">Time together this month</span><strong className="insight-number">{seen.length}<small> of {people.length} people</small></strong><div className="insight-people">{seen.length ? seen.map(({ person }) => chip(person)) : <p className="insight-empty">No plans with anyone yet this month.</p>}</div></div>
+      <div className="insight-col"><span className="insight-label">Feels good with</span><div className="insight-people">{feelsGood.length ? feelsGood.map(({ person }) => chip(person)) : <p className="insight-empty">Write a reflection after time together to see who leaves you feeling good.</p>}</div></div>
+      <div className="insight-col"><span className="insight-label">Might be drifting</span><div className="insight-people">{drifting.length ? drifting.slice(0, 4).map(({ person, days }) => chip(person, days !== null ? `${days}d` : 'not yet')) : <p className="insight-empty">Everyone has been seen recently or has a plan coming up.</p>}</div></div>
+    </div>
+    <p className="insight-footer">{recent.length ? <>Your last 30 days of reflections: <b>{count('positive')}</b> felt good · <b>{count('mixed')}</b> mixed · <b>{count('negative')}</b> draining{count('neutral') ? <> · <b>{count('neutral')}</b> neutral</> : null}</> : 'No reflections in the last 30 days yet.'}</p>
+  </section>;
 }
 
 function SummaryStat({ label, value, icon, onClick }: { label: string; value: number; icon: React.ReactNode; onClick: () => void }) { return <button className="summary-stat" onClick={onClick}><span className="summary-stat-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span><ArrowUpRight size={14} /></button>; }
@@ -752,7 +854,7 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
     <button className="text-button back-link" onClick={onBack}><ArrowLeft size={15} /> All people</button>
     <section className="person-hero"><Avatar person={person} size="lg" /><div className="person-hero-copy"><p className="eyebrow">{person.relationship.toUpperCase()}</p><h1>{person.name}</h1><p className="intro">{person.detail || 'Add a little context to remember what matters.'}</p></div><div className="person-hero-actions"><button className="quiet-button" onClick={onEdit}><Edit3 size={15} /> Edit</button><button className="primary-button" onClick={onAddPlan}><Plus size={16} /> Add plan</button></div></section>
     <dl className="decision-glance person-glance">{glanceFor(insight).map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
-    <div className="person-ask"><span className="ask-label">Ask about {first}</span>{questionsAbout(person).map((question) => <button key={question} className="prompt-pill" onClick={() => onAsk(question)}>{question}<ArrowUpRight size={14} /></button>)}</div>
+    <div className="person-ask"><span className="ask-label">Ask about {first}</span>{questionsAbout(person, insight.upcoming.length > 0).map((question) => <button key={question} className="prompt-pill" onClick={() => onAsk(question)}>{question}<ArrowUpRight size={14} /></button>)}</div>
     {person.note && <section className="content-card person-note"><span className="card-kicker">YOUR NOTE</span><p>{person.note}</p></section>}
     <div className="person-columns">
       <section className="content-card"><div className="card-header"><div><span className="card-kicker">NEXT WITH {first.toUpperCase()}</span><h2>Coming up</h2></div></div><div className="plans-list">{insight.upcoming.length ? insight.upcoming.map((plan) => <PlanRow key={plan.id} plan={plan} person={person} />) : <EmptyInline text={`Nothing planned with ${first} yet.`} action="Add a plan" onClick={onAddPlan} />}</div></section>
@@ -773,10 +875,10 @@ function EmptyInline({ text, action, onClick }: { text: string; action: string; 
 
 function DecisionPanel({ decision, onClear }: { decision: NonNullable<DecisionResult>; onClear: () => void }) {
   const { verdict } = decision;
-  const kicker = decision.kind === 'recall' ? 'LOOKING BACK' : decision.kind === 'when' ? 'YOUR TIME TOGETHER' : 'YOUR ANSWER';
+  const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER' }[decision.kind];
   // Recall questions are answered by the saved memories themselves, so show them up front.
-  const memoriesFirst = decision.kind === 'recall';
-  const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">WHAT YOU SAVED</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
+  const memoriesFirst = decision.kind === 'recall' || decision.kind === 'talk';
+  const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">{decision.kind === 'talk' ? 'THINGS TO BRING UP' : 'WHAT YOU SAVED'}</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
   const hasDetails = Boolean(decision.summary || (!memoriesFirst && decision.memories.length) || decision.options.length || decision.reasonsToMeet.length || decision.reasonsToPostpone.length || decision.reasonsToGatherMore.length || decision.tradeoffs.length);
   return <div className={`decision-panel tone-${verdict.tone}`} aria-live="polite">
     <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
