@@ -579,7 +579,17 @@ function App() {
   const focusQuestion = () => {
     setPage('home');
     setMobileOpen(false);
-    requestAnimationFrame(() => questionRef.current?.focus());
+    // Bring the question section into view and briefly highlight the box, so it's clear where to type.
+    requestAnimationFrame(() => {
+      const input = questionRef.current;
+      if (!input) return;
+      input.closest('.ask-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      input.focus({ preventScroll: true });
+      const box = input.closest('.question-box');
+      box?.classList.remove('question-box-pulse');
+      void (box as HTMLElement | null)?.offsetWidth;
+      box?.classList.add('question-box-pulse');
+    });
   };
 
   useEffect(() => {

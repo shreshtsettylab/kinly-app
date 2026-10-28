@@ -218,6 +218,14 @@ h1 { margin-bottom: 13px; color: var(--text-primary); font-size: clamp(34px, 4vw
   background: var(--surface-card); transition: border .18s, box-shadow .18s;
 }
 .question-box:focus-within { border-color: var(--brand-500); box-shadow: 0 0 0 3px rgba(82,101,121,.12); }
+.ask-section { scroll-margin-top: 28px; }
+.question-box-pulse { animation: question-pulse 1.2s ease-out; }
+@keyframes question-pulse {
+  0% { border-color: var(--clay-600); box-shadow: 0 0 0 0 rgba(164,87,61,.45); }
+  60% { border-color: var(--clay-600); box-shadow: 0 0 0 9px rgba(164,87,61,0); }
+  100% { box-shadow: 0 0 0 3px rgba(82,101,121,.12); }
+}
+@media (prefers-reduced-motion: reduce) { .question-box-pulse { animation: none; } }
 .question-box > svg { color: var(--brand-500); }
 .question-box input, .directory-search input, .modal input {
   width: 100%; border: 0; outline: 0; color: var(--text-primary);
