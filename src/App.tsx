@@ -67,6 +67,11 @@ function fmtDate(dateStr: string): string {
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
+// "19:00" → "7:00 PM"
+function fmtTime(time: string): string {
+  return new Date(`2000-01-01T${time.slice(0, 5)}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 // Dates are compared in the user's own time zone, not UTC.
 function localDateKey(date = new Date()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -144,7 +149,7 @@ function glanceFor({ last, next, feeling }: PersonInsight): Glance[] {
   return [
     { label: 'Last time together', value: last ? `${last.title} · ${relativeDay(last.plan_date)}` : 'No past plans saved' },
     { label: 'How you felt', value: feeling ? `${feeling.label} — “${feeling.excerpt}”` : 'No reflections yet' },
-    { label: 'Next plan', value: next ? `${next.title} · ${relativeDay(next.plan_date)} at ${next.plan_time.slice(0, 5)}` : 'Nothing planned yet' },
+    { label: 'Next plan', value: next ? `${next.title} · ${relativeDay(next.plan_date)} at ${fmtTime(next.plan_time)}` : 'Nothing planned yet' },
   ];
 }
 
@@ -204,7 +209,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   // --- When: last and next time with this person ---
   if (kind === 'when' && insight) {
     const { last, next } = insight;
-    const nextLine = next ? `Next up: "${next.title}" on ${fmtDate(next.plan_date)} at ${next.plan_time.slice(0, 5)}.` : `Nothing is planned with ${firstName} yet.`;
+    const nextLine = next ? `Next up: "${next.title}" on ${fmtDate(next.plan_date)} at ${fmtTime(next.plan_time)}.` : `Nothing is planned with ${firstName} yet.`;
     const verdict: Verdict = last
       ? { tone: 'info', headline: `Last together ${relativeDay(last.plan_date)}`, reason: `"${last.title}" on ${fmtDate(last.plan_date)}. ${nextLine}` }
       : next
@@ -232,14 +237,14 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (person.detail) contextParts.push(`Context you saved: "${person.detail}"`);
     if (insight.reflections.length) contextParts.push(`You have ${insight.reflections.length} reflection${insight.reflections.length === 1 ? '' : 's'} about ${firstName}; the most recent is from ${reflectionDate(insight.reflections[0])}.`);
     if (insight.upcoming.length) {
-      contextParts.push(`You have ${insight.upcoming.length} upcoming plan${insight.upcoming.length === 1 ? '' : 's'} with ${personName}: ${insight.upcoming.map((plan) => `"${plan.title}" on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}`).join('; ')}.`);
+      contextParts.push(`You have ${insight.upcoming.length} upcoming plan${insight.upcoming.length === 1 ? '' : 's'} with ${personName}: ${insight.upcoming.map((plan) => `"${plan.title}" on ${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)}`).join('; ')}.`);
     }
     if (insight.past.length) contextParts.push(`You have ${insight.past.length} past plan${insight.past.length === 1 ? '' : 's'} with ${personName}.`);
   }
 
   if (matchedPlans.length && !person) {
     const plan = matchedPlans[0];
-    contextParts.push(`This relates to a saved plan: "${plan.title}" (${plan.category}) on ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}.`);
+    contextParts.push(`This relates to a saved plan: "${plan.title}" (${plan.category}) on ${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)}.`);
     if (plan.context) contextParts.push(`Plan context: "${plan.context}"`);
   }
 
@@ -291,7 +296,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
 
     const nextPlan = insight.next;
     if (nextPlan) {
-      options.push({ label: 'Keep the existing plan', detail: `You already have "${nextPlan.title}" with ${personName} on ${fmtDate(nextPlan.plan_date)} at ${nextPlan.plan_time.slice(0, 5)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${nextPlan.title}" on ${nextPlan.plan_date} at ${nextPlan.plan_time}.` });
+      options.push({ label: 'Keep the existing plan', detail: `You already have "${nextPlan.title}" with ${personName} on ${fmtDate(nextPlan.plan_date)} at ${fmtTime(nextPlan.plan_time)}. Consider whether meeting ${when} is in addition to that or instead of it.`, evidence: `Saved plan: "${nextPlan.title}" on ${fmtDate(nextPlan.plan_date)} at ${fmtTime(nextPlan.plan_time)}.` });
     } else {
       options.push({ label: 'Add a low-pressure plan', detail: `A short walk or coffee with ${personName} this week could keep the connection warm without overcommitting your week.`, evidence: `${personName} has no upcoming plans in your saved data.` });
     }
@@ -307,25 +312,25 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     const linkedPerson = people.find((item) => item.id === plan.person_id);
     glance = linkedPerson
       ? glanceFor(personInsight(linkedPerson, plans, reflections))
-      : [{ label: 'When', value: `${fmtDate(plan.plan_date)} · ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}` }, { label: 'Category', value: plan.category }];
+      : [{ label: 'When', value: `${fmtDate(plan.plan_date)} · ${relativeDay(plan.plan_date)} at ${fmtTime(plan.plan_time)}` }, { label: 'Category', value: plan.category }];
 
     if (!isUpcoming(plan)) {
       verdict = { tone: 'info', headline: 'That plan has already passed', reason: `"${plan.title}" was ${relativeDay(plan.plan_date)}, on ${fmtDate(plan.plan_date)}.` };
     } else if (plan.context) {
-      verdict = { tone: 'go', headline: 'Yes — keep the plan', reason: `It is ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}, and you saved it with intention: "${plan.context}"` };
+      verdict = { tone: 'go', headline: 'Yes — keep the plan', reason: `It is ${relativeDay(plan.plan_date)} at ${fmtTime(plan.plan_time)}, and you saved it with intention: "${plan.context}"` };
     } else {
-      verdict = { tone: 'maybe', headline: 'Probably — if it still feels right', reason: `"${plan.title}" is ${relativeDay(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}. You did not save why it matters.` };
+      verdict = { tone: 'maybe', headline: 'Probably — if it still feels right', reason: `"${plan.title}" is ${relativeDay(plan.plan_date)} at ${fmtTime(plan.plan_time)}. You did not save why it matters.` };
       followUp = `What has changed since you saved "${plan.title}"? If it still feels right, keep it.`;
     }
 
-    reasonsToMeet.push(`"${plan.title}" is already saved for ${fmtDate(plan.plan_date)} at ${plan.plan_time.slice(0, 5)}.`);
+    reasonsToMeet.push(`"${plan.title}" is already saved for ${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)}.`);
     if (plan.context) reasonsToMeet.push(`Your saved context: "${plan.context}"`);
     if (linkedPerson) reasonsToMeet.push(`This plan is linked to ${linkedPerson.name}.`);
     if (scheduleCount >= 3) reasonsToPostpone.push(`You have ${scheduleCount} upcoming plans already.`);
     if (!plan.context) reasonsToGatherMore.push('This plan has no saved context. Adding one would clarify whether the timing fits.');
     reasonsToGatherMore.push('Check whether anything else on your calendar conflicts.');
 
-    options.push({ label: 'Go ahead with the saved plan', detail: `"${plan.title}" is already on your calendar for ${fmtDate(plan.plan_date)}. Trust the intention you captured.`, evidence: `Saved plan: "${plan.title}" on ${plan.plan_date} at ${plan.plan_time}.` });
+    options.push({ label: 'Go ahead with the saved plan', detail: `"${plan.title}" is already on your calendar for ${fmtDate(plan.plan_date)}. Trust the intention you captured.`, evidence: `Saved plan: "${plan.title}" on ${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)}.` });
     options.push({ label: 'Reconsider the timing', detail: 'Review whether the current slot competes with a rest or wellbeing goal before confirming.', evidence: activeGoals.length ? `Active goals: ${activeGoals.map((goal) => `"${goal.title}"`).join(', ')}.` : 'No active goals saved.' });
 
     tradeoffs.push('Following through on a saved plan builds trust with yourself.');
@@ -369,6 +374,9 @@ const navigation: { id: Page; label: string; icon: typeof Home }[] = [
 
 const categories = ['Social', 'Work', 'Family', 'Learning', 'Wellbeing', 'Rest', 'Personal'];
 const goalCategories = ['Work', 'Learning', 'Relationships', 'Wellbeing', 'Rest'];
+// Muted, gender-neutral avatar colours that sit with the charcoal and slate palette.
+const personColors = ['#526579', '#3A5470', '#2E3C4D', '#4D6474', '#5B6F63', '#7A6A5C'];
+const initialsOf = (name: string) => name.split(' ').filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 const maxActiveGoals = 3;
 const goalLimitMessage = 'You can keep up to three active monthly goals. Complete or remove one first.';
 const countActive = (goals: { status: string }[]) => goals.filter((goal) => goal.status === 'active').length;
@@ -391,6 +399,7 @@ function Avatar({ person, size = 'md' }: { person: Person; size?: 'xs' | 'sm' | 
 function App() {
   const [page, setPage] = useState<Page>('home');
   const [personId, setPersonId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState('');
   const [presetPersonId, setPresetPersonId] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
@@ -423,6 +432,7 @@ function App() {
       { id: 'coffee-with-maya-reflection', text: 'Coffee with Maya felt warm and easy. She needs room to think out loud before she wants suggestions. Next time, ask how the studio move is going and just listen.', created_at: new Date(Date.now() - 9 * 86400000).toISOString(), person_id: mayaId },
     ];
     setReflections(readLocalCollection<Reflection>('reflections', seedReflections));
+    setProfileName(readLocalCollection<{ name: string }>('profile', [{ name: 'Jordan Lee' }])[0]?.name || '');
     setLoading(false);
   };
 
@@ -462,7 +472,8 @@ function App() {
     const name = String(form.get('name') || '').trim();
     if (!name) return;
     const relationship = String(form.get('relationship') || '').trim() || 'Person in your life';
-    const values = { name, initials: name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase(), relationship, detail: String(form.get('detail') || '').trim(), note: String(form.get('note') || '').trim(), color: '#526579' };
+    const color = String(form.get('color') || '') || personColors[people.length % personColors.length];
+    const values = { name, initials: initialsOf(name), relationship, detail: String(form.get('detail') || '').trim(), note: String(form.get('note') || '').trim(), color };
     const nextPeople = editingId
       ? people.map((person) => person.id === editingId ? { ...person, ...values } : person)
       : [...people, { ...values, id: createLocalId() }];
@@ -545,6 +556,12 @@ function App() {
     loadData();
   };
 
+  const saveProfileName = (name: string): string => {
+    writeLocalCollection('profile', [{ name: name.trim() }]);
+    setProfileName(name.trim());
+    return name.trim() ? `Saved. Kinly will call you ${name.trim()}.` : 'Name cleared.';
+  };
+
   const exportData = (): string => {
     const backup = { app: 'kinly', version: 1, exported_at: new Date().toISOString(), people, plans, goals, reflections };
     const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
@@ -611,11 +628,11 @@ function App() {
         <nav className="main-nav" aria-label="Main navigation">
           {navigation.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id || (page === 'person' && id === 'people') ? 'nav-item-active' : ''}`} onClick={() => navigate(id)}><Icon size={18} strokeWidth={page === id ? 2.3 : 1.8} /><span>{label}</span>{id === 'home' && <span className="nav-dot" />}</button>)}
         </nav>
-        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design.</span></div><div className="profile-chip"><div className="profile-avatar">JL</div><div><strong>Jordan Lee</strong><span>Personal space</span></div><ChevronRight size={15} className="profile-chevron" /></div></div>
+        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design.</span></div><button className="profile-chip" onClick={() => navigate('settings')} aria-label="Your name and data settings"><div className="profile-avatar">{initialsOf(profileName) || '·'}</div><div><strong>{profileName || 'Your space'}</strong><span>Personal space</span></div><ChevronRight size={15} className="profile-chevron" /></button></div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
       <main className="main-content">
-        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar">JL</div></div></header>
+        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumbs"><span>Kinly</span><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong>{selectedPerson?.name}</strong></> : <strong>{navigation.find((item) => item.id === page)?.label}</strong>}</div><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><div className="top-avatar" aria-hidden="true">{initialsOf(profileName) || '·'}</div></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
           {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
@@ -625,10 +642,10 @@ function App() {
           {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
           {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} />}
-          {page === 'settings' && <SettingsPage counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
+          {page === 'settings' && <SettingsPage profileName={profileName} onSaveName={saveProfileName} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
         </>}
       </main>
-      {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
+      {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
       {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} presetPersonId={presetPersonId} people={people} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePlan} />}
       {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
@@ -652,6 +669,44 @@ function buildQuickQuestions(people: Person[], plans: Plan[], reflections: Refle
   return questions;
 }
 
+type Moment = { kicker: string; title: string; text: string; action: { label: string; personId?: string; question?: string } };
+
+// The Home card picks the most timely thing from saved data, falling back to a gentle prompt.
+function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[]): Moment {
+  const first = (person: Person) => person.name.split(' ')[0];
+  const soon = plans.filter(isUpcoming).sort(bySoonest).find((plan) => daysUntil(plan.plan_date) <= 1 && people.some((person) => person.id === plan.person_id));
+  if (soon) {
+    const person = people.find((item) => item.id === soon.person_id) as Person;
+    const { feeling } = personInsight(person, plans, reflections);
+    const when = daysUntil(soon.plan_date) === 0 ? 'today' : 'tomorrow';
+    return {
+      kicker: when === 'today' ? 'TODAY' : 'COMING UP TOMORROW',
+      title: `${soon.title} with ${first(person)}, ${when} at ${fmtTime(soon.plan_time)}.`,
+      text: person.note ? `Your note: “${person.note}”` : feeling ? `Last time: ${lowerFirst(feeling.label)} — “${feeling.excerpt}”` : soon.context || 'A good moment to think about what you want from the time together.',
+      action: { label: `Open ${first(person)}’s page`, personId: person.id },
+    };
+  }
+  const quiet = people
+    .map((person) => ({ person, insight: personInsight(person, plans, reflections) }))
+    .filter(({ insight }) => insight.last && !insight.next && -daysUntil(insight.last.plan_date) >= 21)
+    .sort((a, b) => (a.insight.last as Plan).plan_date.localeCompare((b.insight.last as Plan).plan_date))[0];
+  if (quiet) {
+    const name = first(quiet.person);
+    return {
+      kicker: 'A GENTLE NUDGE',
+      title: `It has been ${-daysUntil((quiet.insight.last as Plan).plan_date)} days since you saw ${name}.`,
+      text: 'A short message can keep things warm — no plan needed.',
+      action: { label: `Should I reach out to ${name}?`, question: `Should I reach out to ${name}?` },
+    };
+  }
+  return {
+    kicker: 'A MOMENT TO CONSIDER',
+    title: 'What would feel nourishing today?',
+    text: 'Nothing is planned for the next day. Notice what your energy is asking for before you fill the space.',
+    action: { label: 'Reflect for a minute' },
+  };
+}
+
 const questionsAbout = (person: Person) => {
   const first = person.name.split(' ')[0];
   return [`Should I meet ${first}?`, `How did it go with ${first} last time?`, `When did I last see ${first}?`];
@@ -661,6 +716,12 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate,
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
+  const moment = useMemo(() => buildMoment(people, allPlans, reflections), [people, allPlans, reflections]);
+  const runMoment = () => {
+    if (moment.action.personId) onOpenPerson(moment.action.personId);
+    else if (moment.action.question) { ask(moment.action.question); questionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+    else navigate('reflections');
+  };
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (question.trim()) onSubmitQuestion(); };
   const ask = (prompt: string) => { setQuestion(prompt); onSubmitQuestion(prompt); };
   const askSection = <section className="ask-section">
@@ -671,12 +732,12 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, navigate,
     {decision && <DecisionPanel decision={decision} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">A MOMENT TO CONSIDER</span><h2>What would feel nourishing today?</h2><p>You have some open space this evening. Notice what your energy is asking for before you fill it.</p></div><button className="text-button" onClick={() => navigate('reflections')}>Reflect for a minute <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
 }
 
 function SummaryStat({ label, value, icon, onClick }: { label: string; value: number; icon: React.ReactNode; onClick: () => void }) { return <button className="summary-stat" onClick={onClick}><span className="summary-stat-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span><ArrowUpRight size={14} /></button>; }
 
-function PlanRow({ plan, person }: { plan: Plan; person?: Person }) { return <div className="plan-row"><div className="date-block"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</span></div><div className="plan-info"><strong>{plan.title}</strong><span>{person?.name || 'Personal time'} <i>·</i> {plan.category}</span></div><div className="plan-time"><Clock3 size={14} />{plan.plan_time.slice(0, 5)}</div><ChevronRight size={16} className="row-chevron" /></div>; }
+function PlanRow({ plan, person }: { plan: Plan; person?: Person }) { return <div className="plan-row"><div className="date-block"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</span></div><div className="plan-info"><strong>{plan.title}</strong><span>{person?.name || 'Personal time'} <i>·</i> {plan.category}</span></div><div className="plan-time"><Clock3 size={14} />{fmtTime(plan.plan_time)}</div><ChevronRight size={16} className="row-chevron" /></div>; }
 
 function PeoplePage({ search, setSearch, people, onAdd, onOpen, onEdit, onDelete }: { search: string; setSearch: (value: string) => void; people: Person[]; onAdd: () => void; onOpen: (id: string) => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { return <div className="page-wrap people-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR CIRCLE</p><h1>People</h1><p className="intro">The people who shape your days, held in one thoughtful place.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></section><div className="directory-toolbar"><div className="directory-search"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" aria-label="Search people" /></div><span>{people.length} {people.length === 1 ? 'person' : 'people'}</span></div>{people.length ? <div className="people-grid">{people.map((person) => <article className="person-card" key={person.id}><div className="person-card-top"><Avatar person={person} size="lg" /><div className="card-actions"><button className="card-action" onClick={() => onEdit(person.id)} aria-label={`Edit ${person.name}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(person.id)} aria-label={`Delete ${person.name}`}><Trash2 size={15} /></button></div></div><h2>{person.name}</h2><p className="relationship">{person.relationship}</p><p className="person-detail">{person.detail || 'Add a little context to remember what matters.'}</p><div className="person-divider" /><div className="no-plan"><BookOpen size={15} /><span>{person.note || 'No note added yet'}</span></div><button className="view-person" onClick={() => onOpen(person.id)}>Open profile <ArrowUpRight size={15} /></button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Users size={23} /></div><h2>No one by that name yet.</h2><p>Try another search, or add someone new to your circle.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></div>}</div>; }
 
@@ -704,7 +765,7 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
 
 function PlansPage({ plans, people, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section><div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
 
-function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {plan.plan_time.slice(0, 5)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
+function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {fmtTime(plan.plan_time)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
 
 function GoalsPage({ goals, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void; onToggle: (goal: Goal) => void }) { const activeCount = goals.filter((goal) => goal.status === 'active').length; return <div className="page-wrap goals-page"><section className="page-heading-row"><div><p className="eyebrow">THIS MONTH</p><h1>Goals</h1><p className="intro">A few gentle priorities to help your time reflect what matters.</p></div>{activeCount < 3 && <button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button>}</section><div className="goal-limit"><Target size={16} /><span>{activeCount} of 3 active monthly priorities</span><div className="goal-progress"><i style={{ width: `${Math.min(activeCount / 3 * 100, 100)}%` }} /></div></div>{goals.length ? <div className="goals-grid">{goals.map((goal) => <article className={`goal-card ${goal.status === 'completed' ? 'goal-completed' : ''}`} key={goal.id}><div className="goal-card-top"><span className="category-label">{goal.category}</span><div className="card-actions"><button className="card-action" onClick={() => onEdit(goal.id)} aria-label={`Edit ${goal.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(goal.id)} aria-label={`Delete ${goal.title}`}><Trash2 size={15} /></button></div></div><h2>{goal.title}</h2><p>{goal.description || 'No description added.'}</p><button className="goal-status" onClick={() => onToggle(goal)}>{goal.status === 'active' ? <><span className="status-circle" /> Active priority</> : <><Check size={14} /> Completed</>}</button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Target size={21} /></div><h2>What deserves your attention?</h2><p>Keep it light. Start with one priority for this month.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button></div>}</div>; }
 
@@ -740,7 +801,11 @@ function ReflectionsPage({ reflections, people, onSave, onDelete }: { reflection
   return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><BookOpen size={20} /></div><p>No reflections yet. Start with one above.</p></div>}</section></div>;
 }
 
-function PersonModal({ person, onClose, onSubmit }: { person?: Person; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={person ? 'Edit person' : 'Add someone'} eyebrow="YOUR CIRCLE" onClose={onClose}><form onSubmit={onSubmit}><label>Name<input name="name" defaultValue={person?.name} autoFocus placeholder="e.g. Alex Morgan" required /></label><label>Relationship<span className="label-optional">Optional</span><input name="relationship" defaultValue={person?.relationship} placeholder="e.g. close friend, colleague" /></label><label>Context<span className="label-optional">Optional</span><input name="detail" defaultValue={person?.detail} placeholder="What helps you remember this relationship?" /></label><label>Note<span className="label-optional">Optional</span><textarea name="note" defaultValue={person?.note} placeholder="A small thing worth remembering" /></label><ModalActions onClose={onClose} label={person ? 'Save changes' : 'Add person'} /></form></ModalFrame>; }
+function ColorField({ value }: { value: string }) {
+  return <fieldset className="color-field"><legend>Colour</legend><div className="color-swatches">{personColors.map((color) => <label key={color} className="color-swatch" style={{ backgroundColor: color }}><input type="radio" name="color" value={color} defaultChecked={color === value} aria-label={`Colour ${color}`} /><Check size={13} /></label>)}</div></fieldset>;
+}
+
+function PersonModal({ person, defaultColor, onClose, onSubmit }: { person?: Person; defaultColor: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={person ? 'Edit person' : 'Add someone'} eyebrow="YOUR CIRCLE" onClose={onClose}><form onSubmit={onSubmit}><label>Name<input name="name" defaultValue={person?.name} autoFocus placeholder="e.g. Alex Morgan" required /></label><label>Relationship<span className="label-optional">Optional</span><input name="relationship" defaultValue={person?.relationship} placeholder="e.g. close friend, colleague" /></label><label>Context<span className="label-optional">Optional</span><input name="detail" defaultValue={person?.detail} placeholder="What helps you remember this relationship?" /></label><label>Note<span className="label-optional">Optional</span><textarea name="note" defaultValue={person?.note} placeholder="A small thing worth remembering" /></label><ColorField value={person?.color || defaultColor} /><ModalActions onClose={onClose} label={person ? 'Save changes' : 'Add person'} /></form></ModalFrame>; }
 
 function PlanModal({ plan, presetPersonId, people, onClose, onSubmit }: { plan?: Plan; presetPersonId: string | null; people: Person[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={plan ? 'Edit plan' : 'Add a plan'} eyebrow="YOUR TIME" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={plan?.title} autoFocus placeholder="e.g. Dinner with Maya" required /></label><div className="form-row"><label>Date<input type="date" name="plan_date" defaultValue={plan?.plan_date} required /></label><label>Time<input type="time" name="plan_time" defaultValue={plan?.plan_time?.slice(0, 5)} required /></label></div><div className="form-row"><label>Person<select name="person_id" defaultValue={plan?.person_id || presetPersonId || ''}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>Category<select name="category" defaultValue={plan?.category || 'Personal'}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div><label>Context<span className="label-optional">Optional</span><textarea name="context" defaultValue={plan?.context} placeholder="What do you want to keep in mind?" /></label><ModalActions onClose={onClose} label={plan ? 'Save changes' : 'Add plan'} /></form></ModalFrame>; }
 
@@ -755,7 +820,7 @@ function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyeb
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
-function SettingsPage({ counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
+function SettingsPage({ profileName, onSaveName, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { profileName: string; onSaveName: (name: string) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
   const [status, setStatus] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -767,6 +832,7 @@ function SettingsPage({ counts, onExport, onImport, onDeleteAll, onRestoreExampl
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
     <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <section className="content-card settings-name"><div><span className="card-kicker">YOU</span><h2>Your name</h2><p>Shown in the sidebar. Like everything else, it stays in this browser.</p></div><form onSubmit={(event) => { event.preventDefault(); setStatus(onSaveName(String(new FormData(event.currentTarget).get('profile_name') || ''))); }}><input name="profile_name" defaultValue={profileName} placeholder="What should Kinly call you?" aria-label="Your name" maxLength={40} /><button type="submit" className="quiet-button">Save name</button></form></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>
       <section className="content-card settings-card"><span className="card-kicker">RESTORE</span><h2>Import a backup</h2><p>Load a backup file you exported earlier. It replaces what is saved in this browser now.</p><div className="settings-actions"><button className="quiet-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Import backup</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={choseFile} /></div></section>
