@@ -1,7 +1,7 @@
 # Moving Kinly data into accounts — plan
 
 Today all Kinly data lives in the browser. This plan covers moving it into the signed-in user's
-Supabase account safely. **Steps 1–2 are done in code; nothing syncs yet.**
+Supabase account safely. **Steps 1–3 are done; nothing syncs yet.**
 
 ## 1. Private tables (done)
 
@@ -17,10 +17,12 @@ can see, change, delete, forge or reassign someone else's rows. It passed 8 of 8
 real Postgres with Supabase's auth setup recreated, and it correctly failed when a policy was
 deliberately broken. **Run it in the Supabase SQL editor after applying the migration.**
 
-## 3. Apply to Supabase (needs your project)
+## 3. Applied to Supabase (done, 29 Oct 2026)
 
-Supabase dashboard → SQL editor → paste the migration → Run. Then paste the check → Run, and
-confirm every line says PASS.
+Applied to the Kinly project (kmzozybplihymholfwes, Mumbai). The RLS check passed all 8 checks on
+the real database and left nothing behind. With only the publishable key, every table refuses
+reads and writes (42501). Supabase’s security advisor flagged only the optional “leaked password
+protection” switch in Auth settings.
 
 ## 4. First sync — explicit, one-way, reversible (to build next)
 
