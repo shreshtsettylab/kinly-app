@@ -2,13 +2,15 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
-// Runs api/deeper.ts inside the dev server so "Deeper answer" works locally the same way
-// it does on Vercel. Put ANTHROPIC_API_KEY in .env.local (never committed) to try it.
+// Runs the api/*.ts functions inside the dev server so they work locally the same way they do
+// on Vercel. Put ANTHROPIC_API_KEY and the RAZORPAY_ keys in .env.local (never committed).
+const API_ROUTES = ['deeper', 'create-order', 'verify-payment'];
+
 function localApi(): Plugin {
   return {
     name: 'kinly-local-api',
     configureServer(server) {
-      server.middlewares.use('/api/deeper', async (req, res) => {
+      for (const name of API_ROUTES) server.middlewares.use(`/api/${name}`, async (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
           res.end();
@@ -18,8 +20,8 @@ function localApi(): Plugin {
         for await (const chunk of req) chunks.push(chunk as Buffer);
         const headers = new Headers();
         for (const [key, value] of Object.entries(req.headers)) if (typeof value === 'string') headers.set(key, value);
-        const { POST } = await server.ssrLoadModule('/api/deeper.ts');
-        const response: Response = await POST(new Request(`http://${req.headers.host}/api/deeper`, { method: 'POST', headers, body: Buffer.concat(chunks) }));
+        const { POST } = await server.ssrLoadModule(`/api/${name}.ts`);
+        const response: Response = await POST(new Request(`http://${req.headers.host}/api/${name}`, { method: 'POST', headers, body: Buffer.concat(chunks) }));
         res.statusCode = response.status;
         response.headers.forEach((value, key) => res.setHeader(key, value));
         res.end(await response.text());
@@ -30,7 +32,7 @@ function localApi(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  Object.assign(process.env, loadEnv(mode, process.cwd(), 'ANTHROPIC_'));
+  Object.assign(process.env, loadEnv(mode, process.cwd(), ['ANTHROPIC_', 'RAZORPAY_']));
   return {
     plugins: [react(), localApi()],
     resolve: {

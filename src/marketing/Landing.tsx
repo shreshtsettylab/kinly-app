@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, BookOpen, CalendarDays, Check, Download, HardDrive, Lock, Sparkles, Target, Users } from 'lucide-react';
 import { analyticsEnabled } from '../analytics';
 import { authConfigured } from '../auth/supabaseClient';
-import { checkoutAvailable, checkoutIsTest, checkoutUrl } from '../checkout';
+import { checkoutAvailable, checkoutIsTest, startCheckout } from '../checkout';
 import { Link } from '../Link';
+import { navigateTo } from '../router';
 import { demoAnswers, heroVariants } from './demoData';
 import { DemoBadge, DemoResponse, MarketingFooter, MarketingNav, Reveal, SectionIntro, Verdict } from './parts';
 import { hasSavedData } from './savedData';
@@ -75,6 +76,30 @@ const features = [
   { icon: Lock, tag: 'Privacy', title: 'Your notes stay on this device.', text: 'Everything is saved in your browser. Export a backup, restore it, or delete everything in one place.', vignette: <div className="lp-vig-privacy"><HardDrive size={18} /><span>Stored in this browser</span><Download size={16} /></div> },
 ];
 
+// Opens Razorpay's payment window; the order and the signature check happen on the server.
+function SupportButton() {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  async function support() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const outcome = await startCheckout();
+      if (outcome.status === 'succeeded') navigateTo(`/checkout/complete?status=succeeded&payment_id=${encodeURIComponent(outcome.paymentId)}`);
+      else if (outcome.failure) setMessage(`${outcome.failure} You haven’t been charged. You can try again.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Something went wrong. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    <button type="button" className="lp-button lp-button-primary lp-button-block" onClick={support} disabled={busy}>{busy ? 'Opening checkout…' : 'Support Kinly early'}</button>
+    {message && <p className="lp-auth-error" role="alert">{message}</p>}
+    <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Razorpay.'} You’ll see the price in the Razorpay window before you pay.</p>
+  </>;
+}
+
 export default function Landing() {
   const [returning] = useState(hasSavedData);
   // Arriving from another page with a #section link: scroll once the page has rendered.
@@ -130,10 +155,7 @@ export default function Landing() {
           <Reveal delay={90}><article className="lp-plan lp-plan-plus">
             <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Proposed</span></h3><p className="lp-price lp-price-muted">{checkoutAvailable ? 'Support early' : 'Coming later'}</p><p>{checkoutAvailable ? 'Ideas we’re exploring. These features aren’t available yet — supporting now helps build them.' : 'Ideas we’re exploring. Not available yet, and no price is set.'}</p></div>
             <ul>{['Sync across devices, once accounts exist', 'Optional deeper AI answers', 'Longer-term patterns and reviews'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
-            {checkoutAvailable ? <>
-              <a href={checkoutUrl()} className="lp-button lp-button-primary lp-button-block" rel="noopener">Support Kinly early</a>
-              <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Razorpay.'} You’ll see the price on the checkout page before you pay.</p>
-            </> : <>
+            {checkoutAvailable ? <SupportButton /> : <>
               <span className="lp-button lp-button-disabled lp-button-block" aria-disabled="true">Coming later</span>
               <p className="lp-plan-note">There’s no waitlist or payment yet. We’ll share news here first.</p>
             </>}
