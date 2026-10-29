@@ -1,7 +1,7 @@
 # Moving Kinly data into accounts — plan
 
 Today all Kinly data lives in the browser. This plan covers moving it into the signed-in user's
-Supabase account safely. **Steps 1–3 are done; nothing syncs yet.**
+Supabase account safely. **Steps 1–4 are built; nothing syncs automatically.**
 
 ## 1. Private tables (done)
 
@@ -24,7 +24,11 @@ the real database and left nothing behind. With only the publishable key, every 
 reads and writes (42501). Supabase’s security advisor flagged only the optional “leaked password
 protection” switch in Auth settings.
 
-## 4. First sync — explicit, one-way, reversible (to build next)
+## 4. First sync — explicit, one-way, reversible (built)
+
+In the app: Settings → **Back up my data** (signed-in users only). Code: `src/auth/cloudBackup.ts`
+and `src/auth/BackupCard.tsx`. Verified against the real tables in a rolled-back transaction.
+
 
 - Signed-in users see **"Back up my Kinly data to my account"** in Settings. Nothing uploads
   without that click.
