@@ -3,7 +3,7 @@ import { isAuthError, isAuthRetryableFetchError } from '@supabase/supabase-js';
 // Plain-language messages for the errors people actually hit. Anything unexpected falls back
 // to a generic line rather than showing raw server text.
 const messages: Record<string, string> = {
-  invalid_credentials: 'That email and password don’t match. Check them, or reset your password.',
+  invalid_credentials: 'That email and password don’t match an account. Check them, reset your password, or create an account if you’re new.',
   email_not_confirmed: 'Please confirm your email first. We can send the confirmation link again.',
   user_already_exists: 'An account with this email already exists. Try signing in instead.',
   email_exists: 'An account with this email already exists. Try signing in instead.',

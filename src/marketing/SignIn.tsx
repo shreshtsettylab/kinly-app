@@ -26,6 +26,8 @@ export default function SignIn() {
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
+  // Supabase can't say whether the account exists, so offer sign-up alongside the error.
+  const [wrongCredentials, setWrongCredentials] = useState(false);
   const [notice, setNotice] = useState('');
   const [fields, setFields] = useState({ name: '', email: '', password: '', confirm: '' });
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof typeof fields, string>>>({});
@@ -35,7 +37,7 @@ export default function SignIn() {
   // Someone who signs in here, or arrives already signed in, goes on to where they were heading.
   useEffect(() => { if (auth.status === 'signedIn' && busy === 'email') navigateTo(next, { replace: true }); }, [auth.status, busy, next]);
 
-  const switchMode = (nextMode: Mode) => { setMode(nextMode); setError(''); setNotice(''); setNeedsConfirmation(false); setFieldErrors({}); };
+  const switchMode = (nextMode: Mode) => { setMode(nextMode); setError(''); setNotice(''); setNeedsConfirmation(false); setWrongCredentials(false); setFieldErrors({}); };
   const update = (key: keyof typeof fields, value: string) => { setFields({ ...fields, [key]: value }); setFieldErrors({ ...fieldErrors, [key]: undefined }); };
 
   const validate = (): boolean => {
@@ -71,6 +73,7 @@ export default function SignIn() {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password: fields.password });
       if (signInError) {
         setNeedsConfirmation(errorCode(signInError) === 'email_not_confirmed');
+        setWrongCredentials(errorCode(signInError) === 'invalid_credentials');
         setError(friendlyAuthError(signInError));
         setBusy(null);
       }
@@ -137,7 +140,7 @@ export default function SignIn() {
         <label>Email<input name="email" type="email" autoComplete="email" placeholder="you@example.com" value={fields.email} onChange={(event) => update('email', event.target.value)} aria-invalid={!!fieldErrors.email} aria-describedby={fieldErrors.email ? 'email-error' : undefined} />{fieldErrors.email && <span className="lp-field-error" id="email-error">{fieldErrors.email}</span>}</label>
         {mode !== 'forgot' && <label><span className="lp-label-row">Password{mode === 'signin' && <button type="button" className="lp-text-link lp-forgot" onClick={() => switchMode('forgot')}>Forgot password?</button>}</span><input name="password" type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={fields.password} onChange={(event) => update('password', event.target.value)} aria-invalid={!!fieldErrors.password} aria-describedby={fieldErrors.password ? 'password-error' : undefined} />{fieldErrors.password && <span className="lp-field-error" id="password-error">{fieldErrors.password}</span>}</label>}
         {mode === 'signup' && <label>Confirm password<input name="confirm" type="password" autoComplete="new-password" value={fields.confirm} onChange={(event) => update('confirm', event.target.value)} aria-invalid={!!fieldErrors.confirm} aria-describedby={fieldErrors.confirm ? 'confirm-error' : undefined} />{fieldErrors.confirm && <span className="lp-field-error" id="confirm-error">{fieldErrors.confirm}</span>}</label>}
-        {error && <div className="lp-auth-error" role="alert">{error}{needsConfirmation && <button type="button" className="lp-text-link" onClick={resendConfirmation} disabled={busy === 'resend'}>{busy === 'resend' ? 'Sending…' : 'Resend confirmation email'}</button>}</div>}
+        {error && <div className="lp-auth-error" role="alert">{error}{needsConfirmation && <button type="button" className="lp-text-link" onClick={resendConfirmation} disabled={busy === 'resend'}>{busy === 'resend' ? 'Sending…' : 'Resend confirmation email'}</button>}{mode === 'signin' && wrongCredentials && <button type="button" className="lp-text-link" onClick={() => switchMode('signup')}>New to Kinly? Create an account with this email</button>}</div>}
         {notice && <p className="lp-auth-ok" role="status">{notice}</p>}
         <button type="submit" className="lp-button lp-button-primary lp-button-block" disabled={!ready || busy !== null}>{busy === 'email' ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Send reset link'}</button>
         {mode === 'forgot' && <button type="button" className="lp-text-link" onClick={() => switchMode('signin')}>Back to sign in</button>}
