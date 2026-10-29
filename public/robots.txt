@@ -4,5 +4,6 @@ Disallow: /app
 Disallow: /account
 Disallow: /auth/
 Disallow: /reset-password
+Disallow: /checkout/
 
 Sitemap: https://www.kinly.in/sitemap.xml

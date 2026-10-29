@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, BookOpen, CalendarDays, Check, Download, HardDrive, Lock, Sparkles, Target, Users } from 'lucide-react';
 import { analyticsEnabled } from '../analytics';
+import { useAuth } from '../auth/authState';
 import { authConfigured } from '../auth/supabaseClient';
+import { checkoutAvailable, checkoutIsTest, checkoutUrl } from '../checkout';
 import { Link } from '../Link';
 import { demoAnswers, heroVariants } from './demoData';
 import { DemoBadge, DemoResponse, MarketingFooter, MarketingNav, Reveal, SectionIntro, Verdict } from './parts';
@@ -76,6 +78,7 @@ const features = [
 
 export default function Landing() {
   const [returning] = useState(hasSavedData);
+  const auth = useAuth();
   // Arriving from another page with a #section link: scroll once the page has rendered.
   useEffect(() => {
     if (window.location.hash) document.getElementById(window.location.hash.slice(1))?.scrollIntoView();
@@ -127,10 +130,15 @@ export default function Landing() {
             <Link to="/app" className="lp-button lp-button-primary lp-button-block">{returning ? 'Open Kinly' : 'Get started'}</Link>
           </article></Reveal>
           <Reveal delay={90}><article className="lp-plan lp-plan-plus">
-            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Proposed</span></h3><p className="lp-price lp-price-muted">Coming later</p><p>Ideas we’re exploring. Not available yet, and no price is set.</p></div>
+            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Proposed</span></h3><p className="lp-price lp-price-muted">{checkoutAvailable ? 'Support early' : 'Coming later'}</p><p>{checkoutAvailable ? 'Ideas we’re exploring. These features aren’t available yet — supporting now helps build them.' : 'Ideas we’re exploring. Not available yet, and no price is set.'}</p></div>
             <ul>{['Sync across devices, once accounts exist', 'Optional deeper AI answers', 'Longer-term patterns and reviews'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
-            <span className="lp-button lp-button-disabled lp-button-block" aria-disabled="true">Coming later</span>
-            <p className="lp-plan-note">There’s no waitlist or payment yet. We’ll share news here first.</p>
+            {checkoutAvailable ? <>
+              <a href={checkoutUrl(auth.user?.email)} className="lp-button lp-button-primary lp-button-block">Support Kinly early</a>
+              <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Dodo Payments.'} You’ll see the price on the checkout page before you pay.</p>
+            </> : <>
+              <span className="lp-button lp-button-disabled lp-button-block" aria-disabled="true">Coming later</span>
+              <p className="lp-plan-note">There’s no waitlist or payment yet. We’ll share news here first.</p>
+            </>}
           </article></Reveal>
         </div>
       </section>
