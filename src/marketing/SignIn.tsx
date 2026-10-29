@@ -105,7 +105,7 @@ export default function SignIn() {
     else { setError(''); setNeedsConfirmation(false); setNotice('Confirmation email sent. Open the link in this browser.'); }
   };
 
-  const heading = { signin: 'Welcome back.', signup: 'Make Kinly yours.', forgot: 'Reset your password.', 'check-email': 'Check your email.', 'reset-sent': 'Check your email.' }[mode];
+  const heading = { signin: 'Welcome back.', signup: 'Create your account.', forgot: 'Reset your password.', 'check-email': 'Check your email.', 'reset-sent': 'Check your email.' }[mode];
 
   const body = () => {
     if (auth.status === 'signedIn' && busy === null) {
@@ -150,7 +150,7 @@ export default function SignIn() {
     <main className="lp-auth">
       <div className="lp-auth-side">
         <span className="lp-tag">Your account</span>
-        <h1>{heading} <span className="lp-muted">Calmly.</span></h1>
+        <h1>{heading}</h1>
         <p>An account will let Kinly sync across devices in future. For now, your people, plans and reflections stay in this browser — signing in doesn’t move or upload them.</p>
       </div>
       <div className="lp-auth-card">
