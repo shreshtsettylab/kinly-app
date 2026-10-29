@@ -12,6 +12,14 @@ npm run dev
 
 Then open http://localhost:5173. Everything you add is stored only in your browser.
 
+| Path | What it shows |
+|---|---|
+| `/` | Public landing page (sample data only) |
+| `/app` | The Kinly app |
+| `/signin` | Sign-in screen — accounts are not switched on yet, so it never sends what is typed |
+
+`vercel.json` tells Vercel to serve the app for `/app` and `/signin`, so those links work when opened directly.
+
 ## Optional: Deeper answers with Claude AI
 
 Kinly's instant answers work without any setup. The optional "Deeper answer" button sends one
