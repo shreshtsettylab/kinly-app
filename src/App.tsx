@@ -822,7 +822,7 @@ function App() {
   const selectedPerson = people.find((person) => person.id === personId);
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-clarity-mask="True">
       <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
         <div className="brand-row">
           <button className="brand" onClick={() => navigate('home')} aria-label="Go to Kinly home"><img className="brand-icon" src="/assets/kinly-icon.png" alt="" /><span className="brand-wordmark">Kinly</span></button>

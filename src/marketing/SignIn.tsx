@@ -156,7 +156,7 @@ export default function SignIn() {
         <h1>{heading}</h1>
         <p>Your people, plans and reflections stay in this browser. Signing in doesn’t move or upload them — once signed in, you can choose to back them up to your private account from Settings.</p>
       </div>
-      <div className="lp-auth-card">
+      <div className="lp-auth-card" data-clarity-mask="True">
         {body()}
         <Link to="/app" className="lp-auth-continue">Continue without an account <ArrowRight size={15} /></Link>
         {import.meta.env.DEV && !ready && <details className="lp-auth-dev"><summary>Developer note: activating accounts</summary><p>Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> in <code>.env.local</code>, then restart the dev server. Full steps, including Google, are in <code>docs/AUTH_SETUP.md</code>.</p><p>This note only appears while running locally.</p></details>}

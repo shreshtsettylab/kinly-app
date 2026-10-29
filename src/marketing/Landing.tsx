@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowRight, BookOpen, CalendarDays, Check, Download, HardDrive, Lock, Sparkles, Target, Users } from 'lucide-react';
+import { analyticsEnabled } from '../analytics';
 import { authConfigured } from '../auth/supabaseClient';
 import { Link } from '../Link';
 import { demoAnswers, heroVariants } from './demoData';
@@ -141,6 +142,7 @@ export default function Landing() {
             <li><b>Saved in this browser, on this device.</b> People, plans, goals and reflections never leave it unless you choose to.</li>
             <li><b>Not synced.</b> Another device or browser starts empty. Clearing your browser data removes everything.</li>
             <li><b>Backups are yours.</b> Export a file from Settings and restore it anywhere; delete everything in one click.</li>
+            {analyticsEnabled && <li><b>Anonymous usage analytics.</b> We use Microsoft Clarity to see which pages and buttons people use, so we can improve Kinly. Text inside the app and your account is masked — Clarity never sees your notes, names or reflections. It uses cookies to recognise repeat visits.</li>}
             {authConfigured
               ? <li><b>Accounts are optional.</b> If you sign in, you can copy your data to a private account that only you can read. Nothing uploads unless you choose to. It isn’t end-to-end encrypted, and it doesn’t sync across devices automatically yet.</li>
               : <li><b>No accounts yet.</b> We don’t offer cloud backup, end-to-end encryption or account security today, and we won’t claim to.</li>}

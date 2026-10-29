@@ -13,7 +13,7 @@ function AuthShell({ kicker, title, children }: { kicker: string; title: string;
   return <div className="lp lp-auth-page">
     <MarketingNav returning={returning} onLanding={false} />
     <main className="lp-auth lp-auth-single">
-      <div className="lp-auth-card">
+      <div className="lp-auth-card" data-clarity-mask="True">
         <span className="lp-tag">{kicker}</span>
         <h1 className="lp-auth-title">{title}</h1>
         {children}
