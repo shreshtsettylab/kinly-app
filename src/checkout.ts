@@ -1,22 +1,36 @@
-// Dodo Payments hosted checkout via a static payment link: Kinly only builds a URL to Dodo's
-// checkout page, so no API keys live in the browser. The price and product details are set in
-// the Dodo dashboard. Test mode is the default, so nothing can charge real money by accident.
-const productId = (import.meta.env.VITE_DODO_PRODUCT_ID as string | undefined)?.trim() ?? '';
-const live = import.meta.env.VITE_DODO_MODE === 'live';
+// Razorpay hosted checkout: Kinly links to a Razorpay Payment Page (or Payment Link) created in
+// the Razorpay dashboard, so no API keys or secrets live in the browser. The amount and product
+// details are set in Razorpay. Only Razorpay-hosted addresses are accepted.
+const paymentUrl = (import.meta.env.VITE_RAZORPAY_PAYMENT_URL as string | undefined)?.trim() ?? '';
+const live = import.meta.env.VITE_RAZORPAY_MODE === 'live';
 
-export const checkoutAvailable = /^pdt_[A-Za-z0-9]+$/.test(productId);
-export const checkoutIsTest = !live;
-
-export function checkoutUrl(email?: string | null): string {
-  const host = live ? 'https://checkout.dodopayments.com' : 'https://test.checkout.dodopayments.com';
-  const params = new URLSearchParams({ quantity: '1', redirect_url: `${window.location.origin}/checkout/complete` });
-  if (email) params.set('email', email);
-  return `${host}/buy/${encodeURIComponent(productId)}?${params.toString()}`;
+function isRazorpayUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && ['rzp.io', 'pages.razorpay.com', 'razorpay.me'].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
-// What Dodo appends to redirect_url. This is for display only: payments are confirmed by Dodo
-// (dashboard / webhook), never by these browser parameters.
+export const checkoutAvailable = isRazorpayUrl(paymentUrl);
+// Test vs live is decided by which Razorpay mode the page was created in; this only sets the label.
+export const checkoutIsTest = !live;
+export const checkoutProvider = 'Razorpay';
+
+export function checkoutUrl(): string {
+  return paymentUrl;
+}
+
+// What Razorpay appends when it redirects back (Payment Links add razorpay_payment_link_status;
+// Payment Pages add the payment id). For display only: payments are confirmed in the Razorpay
+// dashboard, never by these browser parameters.
 export function checkoutResultFromUrl(): { status: string; paymentId: string } {
   const params = new URLSearchParams(window.location.search);
-  return { status: params.get('status') ?? '', paymentId: params.get('payment_id') ?? '' };
+  const paymentId = params.get('razorpay_payment_id') ?? params.get('payment_id') ?? '';
+  const linkStatus = params.get('razorpay_payment_link_status') ?? params.get('status') ?? '';
+  const status = linkStatus === 'paid' || linkStatus === 'succeeded' || (!linkStatus && paymentId) ? 'succeeded'
+    : linkStatus === 'cancelled' ? 'cancelled'
+      : linkStatus ? 'failed' : '';
+  return { status, paymentId };
 }
