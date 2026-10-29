@@ -24,6 +24,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { AccountCard } from './auth/AccountCard';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 
@@ -1185,6 +1186,7 @@ function SettingsPage({ aiEnabled, onToggleAi, counts, onExport, onImport, onDel
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
     <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on Deeper answers below and ask for one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <AccountCard />
     <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">OPTIONAL · CLAUDE AI</span><h2>Deeper answers</h2><p>When this is on, a “Deeper answer” button appears under Kinly’s instant answers. Tapping it sends that one question — with the notes, plans and reflections about the person involved — to Anthropic’s Claude AI to write a fuller, more personal reply. Nothing is sent unless you tap the button, and nothing is stored by Kinly.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>

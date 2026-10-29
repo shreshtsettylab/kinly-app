@@ -1,19 +1,31 @@
 import { useEffect } from 'react';
 import App from './App';
+import { AuthProvider } from './auth/AuthProvider';
+import { Account, AuthCallback, ResetPassword } from './marketing/AuthPages';
 import Landing from './marketing/Landing';
 import SignIn from './marketing/SignIn';
-import { useRoute } from './router';
+import { useRoute, type Route } from './router';
 
-const titles = {
+const titles: Record<Route, string> = {
   landing: 'Kinly — Make space for what matters',
   app: 'Kinly — Your space',
   signin: 'Sign in — Kinly',
+  callback: 'Signing you in — Kinly',
+  reset: 'Reset your password — Kinly',
+  account: 'Your account — Kinly',
 };
+
+function Screen({ route }: { route: Route }) {
+  if (route === 'app') return <App />;
+  if (route === 'signin') return <SignIn />;
+  if (route === 'callback') return <AuthCallback />;
+  if (route === 'reset') return <ResetPassword />;
+  if (route === 'account') return <Account />;
+  return <Landing />;
+}
 
 export default function Root() {
   const route = useRoute();
   useEffect(() => { document.title = titles[route]; }, [route]);
-  if (route === 'app') return <App />;
-  if (route === 'signin') return <SignIn />;
-  return <Landing />;
+  return <AuthProvider><Screen route={route} /></AuthProvider>;
 }

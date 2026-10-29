@@ -2,6 +2,9 @@
   "rewrites": [
     { "source": "/app", "destination": "/index.html" },
     { "source": "/app/:path*", "destination": "/index.html" },
-    { "source": "/signin", "destination": "/index.html" }
+    { "source": "/signin", "destination": "/index.html" },
+    { "source": "/auth/callback", "destination": "/index.html" },
+    { "source": "/reset-password", "destination": "/index.html" },
+    { "source": "/account", "destination": "/index.html" }
   ]
 }

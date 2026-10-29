@@ -712,6 +712,9 @@ kbd {
 .settings-ai p { max-width: 640px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
 .settings-ai .settings-ai-status { margin-top: 10px; color: var(--clay-ink); font-size: 11px; font-weight: 600; }
 .settings-ai > button { flex-shrink: 0; }
+.settings-account > a, .settings-account-actions { flex-shrink: 0; }
+.settings-account-actions { display: flex; gap: 8px; }
+.settings-account a.quiet-button, .settings-account a.primary-button { text-decoration: none; }
 .deeper-invite { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 0; border: 0; color: var(--clay-600); background: transparent; font-size: 11px; font-weight: 600; }
 .deeper-invite:hover { color: var(--clay-700); }
 .deeper-request { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 14px; }

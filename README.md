@@ -16,9 +16,19 @@ Then open http://localhost:5173. Everything you add is stored only in your brows
 |---|---|
 | `/` | Public landing page (sample data only) |
 | `/app` | The Kinly app |
-| `/signin` | Sign-in screen — accounts are not switched on yet, so it never sends what is typed |
+| `/signin` | Sign in, create an account, or reset a password (Supabase Auth) |
+| `/auth/callback` | Where Google and email links return after signing in |
+| `/reset-password` | Choose a new password from a reset link |
+| `/account` | Account details and sign out — requires being signed in |
 
-`vercel.json` tells Vercel to serve the app for `/app` and `/signin`, so those links work when opened directly.
+`vercel.json` tells Vercel to serve the app for these paths, so links work when opened directly.
+
+## Optional: accounts (Supabase Auth)
+
+Sign-in works once a Supabase project is connected; without one, the sign-in page says accounts
+aren't available and sends nothing. See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for the
+dashboard steps, Google OAuth, environment variables and redirect URLs. Signing in does not yet
+move or sync Kinly data — that stays in the browser.
 
 ## Optional: Deeper answers with Claude AI
 

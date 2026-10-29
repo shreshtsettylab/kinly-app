@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Menu, X } from 'lucide-react';
+import { useAuth } from '../auth/authState';
 import { Link } from '../Link';
 import type { DemoAnswer, Tone } from './demoData';
 
@@ -16,6 +17,7 @@ const navLinks = [
 
 export function MarketingNav({ returning, onLanding = true }: { returning: boolean; onLanding?: boolean }) {
   const [open, setOpen] = useState(false);
+  const signedIn = useAuth().status === 'signedIn';
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -42,14 +44,14 @@ export function MarketingNav({ returning, onLanding = true }: { returning: boole
       <Link to="/" className="lp-nav-brand" aria-label="Kinly home" onClick={() => setOpen(false)}><Wordmark /></Link>
       <nav className="lp-nav-links" aria-label="Main">{navLinks.map((link) => <a key={link.href} href={href(link.href)}>{link.label}</a>)}</nav>
       <div className="lp-nav-actions">
-        <Link to="/signin" className="lp-nav-signin">Sign in</Link>
+        <Link to={signedIn ? "/account" : "/signin"} className="lp-nav-signin">{signedIn ? "Account" : "Sign in"}</Link>
         <Link to="/app" className="lp-button lp-button-primary lp-button-small">{returning ? 'Open Kinly' : 'Get started'}</Link>
         <button className="lp-nav-toggle" aria-label={open ? 'Close menu' : 'Open menu'} aria-expanded={open} aria-controls="lp-mobile-menu" onClick={() => setOpen(!open)}>{open ? <X size={20} /> : <Menu size={20} />}</button>
       </div>
     </div>
     {open && <div className="lp-mobile-menu" id="lp-mobile-menu">
       {navLinks.map((link) => <a key={link.href} href={href(link.href)} onClick={(event) => goToSection(event, link.href)}>{link.label}</a>)}
-      <Link to="/signin" onClick={() => setOpen(false)}>Sign in</Link>
+      <Link to={signedIn ? "/account" : "/signin"} onClick={() => setOpen(false)}>{signedIn ? "Account" : "Sign in"}</Link>
       <Link to="/app" className="lp-button lp-button-primary" onClick={() => setOpen(false)}>{returning ? 'Open Kinly' : 'Get started'}</Link>
     </div>}
   </header>;
@@ -101,6 +103,7 @@ export function DemoResponse({ answer }: { answer: DemoAnswer }) {
 }
 
 export function MarketingFooter() {
+  const signedIn = useAuth().status === 'signedIn';
   return <footer className="lp-footer">
     <div className="lp-footer-inner">
       <div className="lp-footer-brand"><Wordmark /><p>Your people. A more intentional tomorrow.</p></div>
@@ -109,7 +112,7 @@ export function MarketingFooter() {
         <a href="/#features">Features</a>
         <a href="/#pricing">Pricing</a>
         <a href="/#privacy">Privacy</a>
-        <Link to="/signin">Sign in</Link>
+        <Link to={signedIn ? "/account" : "/signin"}>{signedIn ? "Account" : "Sign in"}</Link>
       </nav>
     </div>
     <p className="lp-footer-note">© {new Date().getFullYear()} Kinly · Your data stays in your browser.</p>
