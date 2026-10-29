@@ -106,5 +106,6 @@ each link to the browser that requested it.
   device's browser profile could use the session, so *Sign out* on shared computers.
 - PKCE flow: links and OAuth redirects carry a one-time code, never tokens in the URL.
 - After sign-in, Kinly only redirects to paths on its own site.
-- The open demo policies in `supabase/migrations` must not be applied. Per-user tables and Row
-  Level Security come before any data is stored in Supabase.
+- Private per-user tables with Row Level Security are ready in `supabase/migrations`, with a
+  check in `supabase/tests/rls_check.sql`. See [DATA_SYNC_PLAN.md](DATA_SYNC_PLAN.md) before
+  storing any data in Supabase.

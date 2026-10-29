@@ -25,6 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { AccountCard } from './auth/AccountCard';
+import { Link } from './Link';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 
@@ -830,7 +831,7 @@ function App() {
         <nav className="main-nav" aria-label="Main navigation">
           {navigation.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id || (page === 'person' && id === 'people') ? 'nav-item-active' : ''}`} onClick={() => navigate(id)}><Icon size={18} strokeWidth={page === id ? 2.3 : 1.8} /><span>{label}</span>{id === 'home' && <span className="nav-dot" />}</button>)}
         </nav>
-        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design.</span></div><button className="profile-chip" onClick={() => navigate('you')} aria-label="Your day and profile"><div className="profile-avatar">{initialsOf(profileName) || '·'}</div><div><strong>{profileName || 'Your space'}</strong><span>{todayCheckIn?.mood ? `Feeling ${todayCheckIn.mood}` : energy ? `Energy today: ${energy}` : 'Check in for today'}</span></div><ChevronRight size={15} className="profile-chevron" /></button></div>
+        <div className="sidebar-bottom"><div className="privacy-note"><Sparkles size={15} /><span>Your space is private<br />by design. <Link to="/?home" className="privacy-link">About Kinly</Link></span></div><button className="profile-chip" onClick={() => navigate('you')} aria-label="Your day and profile"><div className="profile-avatar">{initialsOf(profileName) || '·'}</div><div><strong>{profileName || 'Your space'}</strong><span>{todayCheckIn?.mood ? `Feeling ${todayCheckIn.mood}` : energy ? `Energy today: ${energy}` : 'Check in for today'}</span></div><ChevronRight size={15} className="profile-chevron" /></button></div>
       </aside>
       {mobileOpen && <button className="mobile-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
       <main className="main-content">
@@ -1075,13 +1076,34 @@ function PlanModal({ plan, presetPersonId, people, onClose, onSubmit }: { plan?:
 
 function GoalModal({ goal, error, onClose, onSubmit }: { goal?: Goal; error: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={goal ? 'Edit goal' : 'Add a monthly goal'} eyebrow="THIS MONTH" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={goal?.title} autoFocus placeholder="e.g. Protect two evenings for rest" required /></label><label>Category<select name="category" defaultValue={goal?.category || 'Relationships'}>{goalCategories.map((category) => <option key={category}>{category}</option>)}</select></label><label>Description<span className="label-optional">Optional</span><textarea name="description" defaultValue={goal?.description} placeholder="What would this look like in practice?" /></label>{goal && <label>Status<select name="status" defaultValue={goal.status}><option value="active">Active</option><option value="completed">Completed</option></select></label>}{error && <p className="form-error" role="alert">{error}</p>}<ModalActions onClose={onClose} label={goal ? 'Save changes' : 'Add goal'} /></form></ModalFrame>; }
 
+const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 function ModalFrame({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: React.ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; });
+  // Read during the first render, before an autoFocus field inside the form takes focus.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+  // Keyboard users stay inside the open form: focus moves in, Tab and Shift+Tab cycle within it,
+  // Escape closes it, and focus returns to whatever opened it.
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) (dialog.querySelector<HTMLElement>(focusableSelector) ?? dialog).focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { closeRef.current(); return; }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter((item) => item.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const outside = !dialog.contains(document.activeElement);
+      if (event.shiftKey && (outside || document.activeElement === first)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (outside || document.activeElement === last)) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); if (opener && document.contains(opener)) opener.focus(); };
+  }, [opener]);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={dialogRef} tabIndex={-1}><div className="modal-header"><div><span className="card-kicker">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>{children}</div></div>; }
 function ModalActions({ onClose, label }: { onClose: () => void; label: string }) { return <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button"><Check size={16} /> {label}</button></div>; }
 
 const energyScore = { low: 0, okay: 1, good: 2 } as const;
