@@ -6,7 +6,8 @@ const DEFAULT_AMOUNT_PAISE = 9900; // ₹99 placeholder until pricing is decided
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 export async function POST(request: Request): Promise<Response> {
-  const keyId = process.env.RAZORPAY_KEY_ID;
+  // The key id is public, so the browser's copy works here too.
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (!keyId || !keySecret) return json({ error: 'Checkout is not set up on this site yet.' }, 503);
 
