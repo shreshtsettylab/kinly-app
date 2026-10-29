@@ -38,6 +38,18 @@ export function readLocalCollection<T>(key: string, fallback: T[]): T[] {
   }
 }
 
+// Reads a collection without writing anything back — for backups, which must never change local data.
+export function peekLocalCollection(key: string): unknown[] {
+  const stored = getItem(`${storagePrefix}:${key}`);
+  if (!stored) return [];
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function writeLocalCollection<T>(key: string, values: T[]): void {
   setItem(`${storagePrefix}:${key}`, JSON.stringify(values));
 }

@@ -715,7 +715,11 @@ kbd {
 .settings-ai .settings-ai-status { margin-top: 10px; color: var(--clay-ink); font-size: 11px; font-weight: 600; }
 .settings-ai > button { flex-shrink: 0; }
 .settings-account > a, .settings-account-actions { flex-shrink: 0; }
-.settings-account-actions { display: flex; gap: 8px; }
+.settings-account-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.settings-backup p b { color: var(--brand-900); font-weight: 600; }
+.settings-backup .settings-backup-note { margin-top: 8px; color: var(--color-warning); font-size: 12px; }
+.settings-backup .settings-backup-ok { color: var(--color-success); }
+.settings-backup .settings-backup-error { color: var(--color-error); }
 .settings-account a.quiet-button, .settings-account a.primary-button { text-decoration: none; }
 .deeper-invite { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 0; border: 0; color: var(--clay-600); background: transparent; font-size: 11px; font-weight: 600; }
 .deeper-invite:hover { color: var(--clay-700); }

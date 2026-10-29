@@ -154,7 +154,7 @@ export default function SignIn() {
       <div className="lp-auth-side">
         <span className="lp-tag">Your account</span>
         <h1>{heading}</h1>
-        <p>An account will let Kinly sync across devices in future. For now, your people, plans and reflections stay in this browser — signing in doesn’t move or upload them.</p>
+        <p>Your people, plans and reflections stay in this browser. Signing in doesn’t move or upload them — once signed in, you can choose to back them up to your private account from Settings.</p>
       </div>
       <div className="lp-auth-card">
         {body()}

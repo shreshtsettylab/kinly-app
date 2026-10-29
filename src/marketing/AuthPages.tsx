@@ -122,7 +122,7 @@ export function Account() {
       <div><dt>Signed in with</dt><dd>{providers || '—'}</dd></div>
       <div><dt>Member since</dt><dd>{new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</dd></div>
     </dl>
-    <div className="lp-auth-notice" role="note"><Info size={16} /><div><b>Your Kinly data isn’t in your account yet.</b> People, plans, goals and reflections are still stored only in this browser. Syncing them to your account will come later, with your say-so.</div></div>
+    <div className="lp-auth-notice" role="note"><Info size={16} /><div><b>Your Kinly data lives in this browser.</b> Nothing is uploaded automatically. To keep a private copy in your account, use <b>Settings → Back up my data</b> in the app. Automatic syncing across devices will come later.</div></div>
     <div className="lp-auth-done-actions">
       <Link to="/app" className="lp-button lp-button-primary">Open Kinly <ArrowRight size={15} /></Link>
       {user.app_metadata?.providers && (user.app_metadata.providers as string[]).includes('email') && <Link to="/reset-password" className="lp-button lp-button-quiet">Change password</Link>}
