@@ -204,6 +204,22 @@
 .lp-footer-links a { color: var(--text-secondary); font-size: 13px; }
 .lp-footer-links a:hover { color: var(--clay-ink); }
 .lp-footer-note { margin-top: 28px !important; color: var(--text-muted); font-size: 11.5px; }
+.lp-footer-legal { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }
+.lp-footer-legal a { color: var(--text-muted); font-size: 11.5px; }
+.lp-footer-legal a:hover, .lp-plan-note a { color: var(--clay-ink); }
+.lp-plan-note a { text-decoration: underline; }
+
+/* Terms, privacy, refunds, contact */
+.lp-legal { display: grid; justify-items: start; gap: 14px; max-width: 760px; margin: 0 auto; padding: 72px 24px 96px; }
+.lp .lp-legal h1 { font-size: clamp(32px, 4.4vw, 46px); line-height: 1.08; }
+.lp .lp-legal h2 { margin-top: 18px; font-size: 21px; }
+.lp-legal p, .lp-legal li, .lp-legal dd { color: var(--text-secondary); font-size: 15px; line-height: 1.7; }
+.lp-legal ul { display: grid; gap: 8px; padding-left: 20px; list-style: disc; }
+.lp-legal a { color: var(--clay-ink); text-decoration: underline; overflow-wrap: anywhere; }
+.lp-legal-updated { margin-top: -6px; color: var(--text-muted) !important; font-size: 12.5px !important; }
+.lp-legal-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 24px; width: 100%; margin: 6px 0; padding: 22px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-card); }
+.lp-legal-details dt { color: var(--text-muted); font-size: 13px; font-weight: 600; line-height: 1.7; }
+.lp-legal-details dd { margin: 0; }
 
 /* Sign-in */
 .lp-auth { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 64px; align-items: start; max-width: 1100px; margin: 0 auto; padding: 88px 24px 120px; }
@@ -291,7 +307,7 @@
   .lp-nav-actions { gap: 10px; }
 }
 @media (max-width: 760px) {
-  .lp-nav-inner, .lp-hero, .lp-section, .lp-cta, .lp-footer { padding-left: 16px; padding-right: 16px; }
+  .lp-nav-inner, .lp-hero, .lp-section, .lp-cta, .lp-footer, .lp-legal { padding-left: 16px; padding-right: 16px; }
   .lp-hero { padding-top: 44px; }
   .lp-section { padding-top: 88px; }
   .lp-hero-preview { margin-top: 40px; }

@@ -96,7 +96,7 @@ function SupportButton() {
   return <>
     <button type="button" className="lp-button lp-button-primary lp-button-block" onClick={support} disabled={busy}>{busy ? 'Opening checkout…' : 'Support Kinly early'}</button>
     {message && <p className="lp-auth-error" role="alert">{message}</p>}
-    <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Razorpay.'} You’ll see the price in the Razorpay window before you pay.</p>
+    <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Razorpay.'} You’ll see the price in the Razorpay window before you pay. See our <Link to="/terms">terms</Link> and <Link to="/refunds">refund policy</Link>.</p>
   </>;
 }
 

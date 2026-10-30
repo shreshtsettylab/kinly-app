@@ -116,5 +116,11 @@ export function MarketingFooter() {
       </nav>
     </div>
     <p className="lp-footer-note">© {new Date().getFullYear()} Kinly · Your data stays in your browser.</p>
+    <nav className="lp-footer-legal" aria-label="Policies">
+      <Link to="/terms">Terms</Link>
+      <Link to="/privacy">Privacy policy</Link>
+      <Link to="/refunds">Refunds</Link>
+      <Link to="/contact">Contact</Link>
+    </nav>
   </footer>;
 }
