@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   ArrowUpRight,
   BookOpen,
@@ -29,9 +31,12 @@ import { BackupCard } from './auth/BackupCard';
 import { Link } from './Link';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
+import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
+import { FREE_LIMITS, usePlan, type LimitKind } from './subscription';
 
 type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
-type Person = Omit<SeedPerson, 'id'> & { id: string };
+// Archived people stay saved, with their history, but don't count towards the Free limit.
+type Person = Omit<SeedPerson, 'id'> & { id: string; archived?: boolean };
 type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
 type Reflection = { id: string; text: string; created_at: string; person_id?: string | null };
@@ -49,9 +54,6 @@ type Recharge = 'alone' | 'one-on-one' | 'small-group' | '';
 type Profile = { name: string; pronouns: string; recharge: Recharge; freeEvenings: number[]; intention: string; weeklyGoal: number; quietDays: number[] };
 type CheckIn = { date: string; energy: Energy; social: Social; freeTonight: boolean | null; mood: string };
 type DayContext = { energy: Energy; social: Social; freeTonight: boolean | null; quietToday: boolean; recharge: Recharge; freeEvenings: number[]; intention: string };
-type DeeperAnswer = { verdict: Verdict['tone']; headline: string; reason: string; points: string[] };
-type DeeperState = { status: 'idle' | 'loading' | 'done' | 'error'; answer?: DeeperAnswer; error?: string };
-type DeeperControls = { enabled: boolean; state: DeeperState; onRequest: () => void; onEnable: () => void };
 type DecisionResult = {
   kind: 'decide' | 'recall' | 'when' | 'cancel' | 'talk' | 'who';
   verdict: Verdict;
@@ -501,8 +503,8 @@ const weekdayOrder = [1, 2, 3, 4, 5, 6, 0];
 // Muted, gender-neutral avatar colours that sit with the charcoal and slate palette.
 const personColors = ['#526579', '#3A5470', '#2E3C4D', '#4D6474', '#5B6F63', '#7A6A5C'];
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-const maxActiveGoals = 3;
-const goalLimitMessage = 'You can keep up to three active monthly goals. Complete or remove one first.';
+const goalLimitMessage = `Kinly Free keeps up to ${FREE_LIMITS.goals} active goals. Mark one completed first, or explore Kinly Plus for unlimited goals.`;
+const planLimitMessage = `Kinly Free keeps up to ${FREE_LIMITS.plans} upcoming plans. Past plans don’t count. Explore Kinly Plus for unlimited plans.`;
 const countActive = (goals: { status: string }[]) => goals.filter((goal) => goal.status === 'active').length;
 // Fields every saved item must have; used to check backup files before importing them.
 const collectionFields = {
@@ -539,8 +541,9 @@ function App() {
   const energy = todayCheckIn?.energy ?? null;
   const profileName = profile.name;
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [deeper, setDeeper] = useState<DeeperState>({ status: 'idle' });
-  const latestQuestion = useRef('');
+  const plan = usePlan();
+  // Shown when someone tries to go past a Free limit; dismissible and never repeated on its own.
+  const [limitNotice, setLimitNotice] = useState<LimitKind | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -574,6 +577,7 @@ function App() {
 
   const navigate = (nextPage: Page) => {
     setPage(nextPage);
+    setLimitNotice(null);
     setMobileOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -609,6 +613,11 @@ function App() {
   const filteredPeople = useMemo(() => people.filter((person) => `${person.name} ${person.relationship}`.toLowerCase().includes(search.toLowerCase())), [people, search]);
   const upcomingPlans = useMemo(() => plans.filter(isUpcoming).sort(bySoonest), [plans]);
   const activeGoals = goals.filter((goal) => goal.status === 'active');
+  const activePeople = useMemo(() => people.filter((person) => !person.archived), [people]);
+  // Free limits count only what is active: people who aren't archived, plans still ahead, goals not completed.
+  const activeCounts: Record<LimitKind, number> = { people: activePeople.length, plans: upcomingPlans.length, goals: activeGoals.length };
+  const limits = plan.isPlus ? null : FREE_LIMITS;
+  const atLimit = (kind: LimitKind) => !!limits && activeCounts[kind] >= limits[kind];
 
   const savePerson = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -621,8 +630,16 @@ function App() {
     const nextPeople = editingId
       ? people.map((person) => person.id === editingId ? { ...person, ...values } : person)
       : [...people, { ...values, id: createLocalId() }];
+    if (!editingId && atLimit('people')) { setModal(null); setLimitNotice('people'); return; }
     writeLocalCollection('people', nextPeople);
     setModal(null); setEditingId(null); loadData();
+  };
+
+  const archivePerson = (id: string, archived: boolean) => {
+    if (!archived && atLimit('people')) { setLimitNotice('people'); return; }
+    writeLocalCollection('people', people.map((person) => person.id === id ? { ...person, archived } : person));
+    setLimitNotice(null);
+    loadData();
   };
 
   const deletePerson = async (id: string) => {
@@ -646,6 +663,8 @@ function App() {
     const nextPlans = editingId
       ? plans.map((plan) => plan.id === editingId ? { ...plan, ...values } : plan)
       : [...plans, { ...values, id: createLocalId() }];
+    const becomesActive = isUpcoming({ ...values, id: '' }) && !(editingId && upcomingPlans.some((item) => item.id === editingId));
+    if (limits && becomesActive && nextPlans.filter(isUpcoming).length > limits.plans) { setError(planLimitMessage); return; }
     writeLocalCollection('plans', nextPlans);
     setModal(null); setEditingId(null); loadData();
   };
@@ -665,7 +684,7 @@ function App() {
     const nextGoals = editingId
       ? goals.map((goal) => goal.id === editingId ? { ...goal, ...values } : goal)
       : [...goals, { ...values, id: createLocalId(), month_start: `${localDateKey().slice(0, 7)}-01` }];
-    if (countActive(nextGoals) > maxActiveGoals) { setError(goalLimitMessage); return; }
+    if (limits && countActive(nextGoals) > Math.max(limits.goals, activeGoals.length)) { setError(goalLimitMessage); return; }
     writeLocalCollection('goals', nextGoals);
     setModal(null); setEditingId(null); loadData();
   };
@@ -678,7 +697,7 @@ function App() {
 
   const toggleGoal = async (goal: Goal) => {
     const nextGoals = goals.map((item) => item.id === goal.id ? { ...item, status: goal.status === 'active' ? 'completed' : 'active' } : item);
-    if (countActive(nextGoals) > maxActiveGoals) { setError(goalLimitMessage); return; }
+    if (limits && goal.status !== 'active' && countActive(nextGoals) > limits.goals) { setLimitNotice('goals'); return; }
     writeLocalCollection('goals', nextGoals);
     loadData();
   };
@@ -703,7 +722,7 @@ function App() {
   const setDeeperAnswers = (on: boolean): string => {
     writeLocalCollection('settings', [{ deeperAnswers: on }]);
     setAiEnabled(on);
-    return on ? 'Deeper answers are on. Nothing is sent until you tap “Deeper answer”.' : 'Deeper answers are off. Nothing will be sent to Claude.';
+    return on ? 'AI features are on. Nothing is sent until you tap one.' : 'AI features are off. Nothing will be sent to Claude.';
   };
 
   const saveProfile = (patch: Partial<Profile>) => {
@@ -771,46 +790,56 @@ function App() {
   const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
   const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, day), [submittedQuestion, people, plans, goals, reflections, day]);
 
-  // A new question or energy level clears any earlier Claude answer.
-  latestQuestion.current = `${submittedQuestion}|${energy}`;
-  useEffect(() => { setDeeper({ status: 'idle' }); }, [submittedQuestion, energy]);
-
-  // Sends only this question and the saved context it relates to, and only when asked.
-  const requestDeeper = async () => {
-    if (!decisionResult) return;
-    const asked = latestQuestion.current;
-    const cut = (value: string, max: number) => value.slice(0, max);
+  // What each AI feature sends: only the saved context it needs, cut to size, and only when tapped.
+  const cut = (value: string, max: number) => value.slice(0, max);
+  const planItem = (item: Plan) => ({ title: cut(item.title, 120), when: `${fmtDate(item.plan_date)} at ${fmtTime(item.plan_time)} (${relativeDay(item.plan_date)})`, category: cut(item.category, 30), context: cut(item.context, 400), with: cut(people.find((person) => person.id === item.person_id)?.name ?? '', 80), upcoming: isUpcoming(item) });
+  const reflectionItem = (item: Reflection) => ({ date: reflectionDate(item), about: cut(people.find((person) => person.id === item.person_id)?.name ?? '', 80), text: cut(item.text, 1200) });
+  const personItem = (person: Person) => ({ name: cut(person.name, 80), relationship: cut(person.relationship, 80), detail: cut(person.detail, 300), note: cut(person.note, 600) });
+  const goalItem = (goal: Goal) => ({ title: cut(goal.title, 120), category: cut(goal.category, 30), description: cut(goal.description, 300) });
+  const aboutYou = { social: day.social === 'company' ? 'up for company' : day.social === 'quiet' ? 'wants some quiet' : 'not said', freeTonight: day.freeTonight === null ? 'not said' : day.freeTonight ? 'yes' : 'not really', mood: cut(todayCheckIn?.mood ?? '', 30), recharge: day.recharge || 'not said', intention: cut(day.intention, 160), quietDay: day.quietToday };
+  const circleItem = (item: Person) => {
+    const itemInsight = personInsight(item, plans, reflections);
+    return { name: cut(item.name, 80), last: itemInsight.last ? cut(`${itemInsight.last.title}, ${relativeDay(itemInsight.last.plan_date)}`, 100) : 'none saved', next: itemInsight.next ? cut(`${itemInsight.next.title}, ${relativeDay(itemInsight.next.plan_date)}`, 100) : 'none planned', feeling: itemInsight.feeling?.label || 'no reflections' };
+  };
+  const decisionContext = () => {
+    if (!decisionResult) return { today: fmtDate(localDateKey()) };
     const person = decisionResult.kind === 'who' ? undefined : decisionResult.matchedPeople[0] ?? people.find((item) => item.id === decisionResult.matchedPlans[0]?.person_id);
     const insight = person ? personInsight(person, plans, reflections) : null;
-    const planItem = (plan: Plan) => ({ title: cut(plan.title, 120), when: `${fmtDate(plan.plan_date)} at ${fmtTime(plan.plan_time)} (${relativeDay(plan.plan_date)})`, category: cut(plan.category, 30), context: cut(plan.context, 400), upcoming: isUpcoming(plan) });
-    const body = {
+    return {
+      today: fmtDate(localDateKey()),
       question: cut(submittedQuestion, 300),
       energy,
-      aboutYou: { social: day.social === 'company' ? 'up for company' : day.social === 'quiet' ? 'wants some quiet' : 'not said', freeTonight: day.freeTonight === null ? 'not said' : day.freeTonight ? 'yes' : 'not really', mood: cut(todayCheckIn?.mood ?? '', 30), recharge: day.recharge || 'not said', intention: cut(day.intention, 160), quietDay: day.quietToday },
-      today: fmtDate(localDateKey()),
+      aboutYou,
       instantAnswer: { headline: cut(decisionResult.verdict.headline, 120), reason: cut(decisionResult.verdict.reason, 500) },
-      person: person ? { name: cut(person.name, 80), relationship: cut(person.relationship, 80), detail: cut(person.detail, 300), note: cut(person.note, 600) } : null,
+      person: person ? personItem(person) : null,
       plans: insight ? [...insight.upcoming.slice(0, 5), ...insight.past.slice(0, 5)].map(planItem) : decisionResult.matchedPlans.slice(0, 5).map(planItem),
-      reflections: insight ? insight.reflections.slice(0, 5).map((reflection) => ({ date: reflectionDate(reflection), text: cut(reflection.text, 1200) })) : [],
-      circle: decisionResult.kind === 'who' ? people.slice(0, 12).map((item) => {
-        const itemInsight = personInsight(item, plans, reflections);
-        return { name: cut(item.name, 80), last: itemInsight.last ? cut(`${itemInsight.last.title}, ${relativeDay(itemInsight.last.plan_date)}`, 100) : 'none saved', next: itemInsight.next ? cut(`${itemInsight.next.title}, ${relativeDay(itemInsight.next.plan_date)}`, 100) : 'none planned', feeling: itemInsight.feeling?.label || 'no reflections' };
-      }) : [],
+      reflections: insight ? insight.reflections.slice(0, 5).map(reflectionItem) : [],
+      circle: decisionResult.kind === 'who' ? activePeople.slice(0, 12).map(circleItem) : [],
+      goals: activeGoals.slice(0, 5).map(goalItem),
     };
-    setDeeper({ status: 'loading' });
-    try {
-      const response = await fetch('/api/deeper', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.answer) throw new Error(data.error || 'Deeper answers are not available right now.');
-      if (latestQuestion.current === asked) setDeeper({ status: 'done', answer: data.answer });
-    } catch (failure) {
-      if (latestQuestion.current === asked) setDeeper({ status: 'error', error: failure instanceof Error ? failure.message : 'Something went wrong. Try again.' });
-    }
   };
-  const deeperControls: DeeperControls = { enabled: aiEnabled, state: deeper, onRequest: requestDeeper, onEnable: () => navigate('settings') };
+  const personContext = (person: Person) => {
+    const insight = personInsight(person, plans, reflections);
+    return { today: fmtDate(localDateKey()), person: personItem(person), plans: [...insight.upcoming.slice(0, 10), ...insight.past.slice(0, 10)].map(planItem), reflections: insight.reflections.slice(0, 10).map(reflectionItem) };
+  };
+  const reflectionContext = () => ({ today: fmtDate(localDateKey()), aboutYou, reflections: [...reflections].sort(byNewest).slice(0, 10).map(reflectionItem) });
+  const weeklyContext = () => ({
+    today: fmtDate(localDateKey()),
+    aboutYou,
+    plans: plans.filter((item) => Math.abs(daysUntil(item.plan_date)) <= 7).sort(bySoonest).slice(0, 20).map(planItem),
+    reflections: reflections.filter((item) => Date.now() - Date.parse(item.created_at) <= 7 * 86400000).sort(byNewest).slice(0, 10).map(reflectionItem),
+    circle: activePeople.slice(0, 12).map(circleItem),
+    goals: activeGoals.slice(0, 10).map(goalItem),
+  });
+  const aiProps = { plan, aiEnabled, onEnableAi: () => navigate('settings') };
 
-  const openModal = (type: Modal, id: string | null = null) => { setModal(type); setEditingId(id); setError(''); setPresetPersonId(null); };
-  const openPlanFor = (id: string) => { openModal('plan'); setPresetPersonId(id); };
+  const openModal = (type: Modal, id: string | null = null) => {
+    // Adding past a Free limit explains the limit instead of opening an empty form.
+    const kind = type === 'person' ? 'people' : type === 'plan' ? 'plans' : type === 'goal' ? 'goals' : null;
+    if (!id && kind && atLimit(kind)) { setLimitNotice(kind); return; }
+    setModal(type); setEditingId(id); setError(''); setPresetPersonId(null);
+  };
+  const openPlanFor = (id: string) => { if (atLimit('plans')) { setLimitNotice('plans'); return; } openModal('plan'); setPresetPersonId(id); };
   const openPerson = (id: string) => { setPersonId(id); navigate('person'); };
   const askAbout = (text: string) => {
     setQuestion(text);
@@ -838,20 +867,21 @@ function App() {
       <main className="main-content">
         <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="breadcrumb-link" onClick={() => navigate('home')}>Kinly</button><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong aria-current="page">{selectedPerson?.name}</strong></> : <strong aria-current="page">{page === 'you' ? 'You' : navigation.find((item) => item.id === page)?.label}</strong>}</nav><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><button className="top-avatar" onClick={() => navigate('you')} aria-label="Your day and profile" title="Your day and profile">{initialsOf(profileName) || '·'}</button></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
+        {limitNotice && <UpgradeNotice kind={limitNotice} onDismiss={() => setLimitNotice(null)} />}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} deeper={deeperControls} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={people} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
-          {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
-          {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} />}
-          {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
-          {page === 'plans' && <PlansPage plans={plans} people={people} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
-          {page === 'goals' && <GoalsPage goals={goals} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
-          {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
+          {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} onArchive={(archived) => archivePerson(selectedPerson.id, archived)} ai={<div className="person-ai"><AiPanel key={`prep-${selectedPerson.id}`} feature="conversation_prep" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Conversation preparation suggests an opener and what to follow up on, from your own notes." /><AiPanel key={`analysis-${selectedPerson.id}`} feature="relationship_analysis" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Detailed relationship analysis looks at the rhythm of your time together and how it has felt." /></div>} />}
+          {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
+          {page === 'plans' && <PlansPage plans={plans} people={people} limit={limits?.plans ?? null} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
+          {page === 'goals' && <GoalsPage goals={goals} limit={limits?.goals ?? null} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
+          {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} ai={reflections.length > 0 ? <AiPanel feature="reflection" {...aiProps} buildContext={reflectionContext} sends="your 10 most recent reflections" benefit="An AI reflection notices themes across what you’ve written and offers a question to sit with." /> : null} />}
           {page === 'you' && <YouPage profile={profile} onSaveProfile={saveProfile} todayCheckIn={todayCheckIn} onCheckIn={updateCheckIn} checkins={checkins} people={people} plans={plans} reflections={reflections} />}
-          {page === 'settings' && <SettingsPage aiEnabled={aiEnabled} onToggleAi={setDeeperAnswers} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
+          {page === 'settings' && <SettingsPage plan={plan} aiEnabled={aiEnabled} onToggleAi={setDeeperAnswers} counts={{ people: people.length, plans: plans.length, goals: goals.length, reflections: reflections.length }} onExport={exportData} onImport={importData} onDeleteAll={deleteAllData} onRestoreExamples={restoreExamples} />}
         </>}
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
-      {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} presetPersonId={presetPersonId} people={people} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePlan} />}
+      {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} presetPersonId={presetPersonId} people={activePeople} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={savePlan} />}
       {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
   );
@@ -932,7 +962,7 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; deeper: DeeperControls; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, ai, weekly, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
@@ -950,10 +980,10 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, deeper, e
     {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
     <div className="energy-row" role="group" aria-label="Your energy right now"><span className="ask-label">Your energy right now</span>{energyLevels.map((level) => <button type="button" key={level.value} className={`energy-option ${energy === level.value ? 'energy-active' : ''}`} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div>
     <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
-    {decision && <DecisionPanel decision={decision} deeper={deeper} onClear={() => setQuestion('')} />}
+    {decision && <DecisionPanel decision={decision} ai={ai} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>Your people. A more intentional tomorrow.</h1><p className="intro">Think clearly about your time, your relationships, and the choices between them.</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section>{askSection}<div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><section className="content-card weekly-review"><div><span className="card-kicker">KINLY PLUS · WEEKLY REVIEW</span><h2>Look back, look ahead</h2><p>Who you saw this week, how it felt, and what the week ahead could hold.</p></div>{weekly}</section><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></div>;
 }
 
 // A monthly read on the circle: who you saw, who feels good to be around, who may be drifting.
@@ -995,9 +1025,14 @@ function SummaryStat({ label, value, icon, onClick }: { label: string; value: nu
 
 function PlanRow({ plan, person }: { plan: Plan; person?: Person }) { return <div className="plan-row"><div className="date-block"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</span></div><div className="plan-info"><strong>{plan.title}</strong><span>{person?.name || 'Personal time'} <i>·</i> {plan.category}</span></div><div className="plan-time"><Clock3 size={14} />{fmtTime(plan.plan_time)}</div><ChevronRight size={16} className="row-chevron" /></div>; }
 
-function PeoplePage({ search, setSearch, people, onAdd, onOpen, onEdit, onDelete }: { search: string; setSearch: (value: string) => void; people: Person[]; onAdd: () => void; onOpen: (id: string) => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { return <div className="page-wrap people-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR CIRCLE</p><h1>People</h1><p className="intro">The people who shape your days, held in one thoughtful place.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></section><div className="directory-toolbar"><div className="directory-search"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" aria-label="Search people" /></div><span>{people.length} {people.length === 1 ? 'person' : 'people'}</span></div>{people.length ? <div className="people-grid">{people.map((person) => <article className="person-card" key={person.id}><div className="person-card-top"><Avatar person={person} size="lg" /><div className="card-actions"><button className="card-action" onClick={() => onEdit(person.id)} aria-label={`Edit ${person.name}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(person.id)} aria-label={`Delete ${person.name}`}><Trash2 size={15} /></button></div></div><h2>{person.name}</h2><p className="relationship">{person.relationship}</p><p className="person-detail">{person.detail || 'Add a little context to remember what matters.'}</p><div className="person-divider" /><div className="no-plan"><BookOpen size={15} /><span>{person.note || 'No note added yet'}</span></div><button className="view-person" onClick={() => onOpen(person.id)}>Open profile <ArrowUpRight size={15} /></button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Users size={23} /></div><h2>No one by that name yet.</h2><p>Try another search, or add someone new to your circle.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></div>}</div>; }
+function PeoplePage({ search, setSearch, people, limit, activeCount, onAdd, onOpen, onEdit, onDelete }: { search: string; setSearch: (value: string) => void; people: Person[]; limit: number | null; activeCount: number; onAdd: () => void; onOpen: (id: string) => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) {
+  const active = people.filter((person) => !person.archived);
+  const archived = people.filter((person) => person.archived);
+  const card = (person: Person) => <article className={`person-card ${person.archived ? 'person-card-archived' : ''}`} key={person.id}><div className="person-card-top"><Avatar person={person} size="lg" /><div className="card-actions"><button className="card-action" onClick={() => onEdit(person.id)} aria-label={`Edit ${person.name}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(person.id)} aria-label={`Delete ${person.name}`}><Trash2 size={15} /></button></div></div><h2>{person.name}</h2><p className="relationship">{person.relationship}{person.archived && <span className="archived-chip">Archived</span>}</p><p className="person-detail">{person.detail || 'Add a little context to remember what matters.'}</p><div className="person-divider" /><div className="no-plan"><BookOpen size={15} /><span>{person.note || 'No note added yet'}</span></div><button className="view-person" onClick={() => onOpen(person.id)}>Open profile <ArrowUpRight size={15} /></button></article>;
+  return <div className="page-wrap people-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR CIRCLE</p><h1>People</h1><p className="intro">The people who shape your days, held in one thoughtful place.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></section><div className="directory-toolbar"><div className="directory-search"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people" aria-label="Search people" /></div><span>{limit ? `${activeCount} of ${limit} people on Free` : `${activeCount} ${activeCount === 1 ? 'person' : 'people'}`}</span></div>{active.length ? <div className="people-grid">{active.map(card)}</div> : <div className="empty-state"><div className="empty-icon"><Users size={23} /></div><h2>{search ? 'No one by that name yet.' : 'Your circle starts here.'}</h2><p>{search ? 'Try another search, or add someone new to your circle.' : 'Add the first person you’d like to keep close.'}</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add person</button></div>}{archived.length > 0 && <details className="archived-people"><summary>Archived ({archived.length}) <ChevronRight size={14} /></summary><p className="intro">Archived people keep all their notes, plans and reflections. They don’t count towards the Free limit.</p><div className="people-grid">{archived.map(card)}</div></details>}</div>;
+}
 
-function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAsk, onSaveReflection }: { person: Person; insight: PersonInsight; onBack: () => void; onEdit: () => void; onDelete: () => void; onAddPlan: () => void; onAsk: (question: string) => void; onSaveReflection: (event: FormEvent<HTMLFormElement>) => void }) {
+function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAsk, onSaveReflection, onArchive, ai }: { person: Person; insight: PersonInsight; onBack: () => void; onEdit: () => void; onDelete: () => void; onAddPlan: () => void; onAsk: (question: string) => void; onSaveReflection: (event: FormEvent<HTMLFormElement>) => void; onArchive: (archived: boolean) => void; ai: ReactNode }) {
   const first = person.name.split(' ')[0];
   // Past plans and reflections in one timeline, newest first.
   const history = [
@@ -1006,37 +1041,29 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
   ].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
   return <div className="page-wrap person-page">
     <button className="text-button back-link" onClick={onBack}><ArrowLeft size={15} /> All people</button>
-    <section className="person-hero"><Avatar person={person} size="lg" /><div className="person-hero-copy"><p className="eyebrow">{person.relationship.toUpperCase()}</p><h1>{person.name}</h1><p className="intro">{person.detail || 'Add a little context to remember what matters.'}</p></div><div className="person-hero-actions"><button className="quiet-button" onClick={onEdit}><Edit3 size={15} /> Edit</button><button className="primary-button" onClick={onAddPlan}><Plus size={16} /> Add plan</button></div></section>
+    <section className="person-hero"><Avatar person={person} size="lg" /><div className="person-hero-copy"><p className="eyebrow">{person.relationship.toUpperCase()}{person.archived && ' · ARCHIVED'}</p><h1>{person.name}</h1><p className="intro">{person.detail || 'Add a little context to remember what matters.'}</p></div><div className="person-hero-actions"><button className="quiet-button" onClick={onEdit}><Edit3 size={15} /> Edit</button><button className="primary-button" onClick={onAddPlan}><Plus size={16} /> Add plan</button></div></section>
     <dl className="decision-glance person-glance">{glanceFor(insight).map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
     <div className="person-ask"><span className="ask-label">Ask about {first}</span>{questionsAbout(person, insight.upcoming.length > 0).map((question) => <button key={question} className="prompt-pill" onClick={() => onAsk(question)}>{question}<ArrowUpRight size={14} /></button>)}</div>
     {person.note && <section className="content-card person-note"><span className="card-kicker">YOUR NOTE</span><p>{person.note}</p></section>}
+    <section className="content-card person-plus"><span className="card-kicker">KINLY PLUS · WITH {first.toUpperCase()}</span>{ai}</section>
     <div className="person-columns">
       <section className="content-card"><div className="card-header"><div><span className="card-kicker">NEXT WITH {first.toUpperCase()}</span><h2>Coming up</h2></div></div><div className="plans-list">{insight.upcoming.length ? insight.upcoming.map((plan) => <PlanRow key={plan.id} plan={plan} person={person} />) : <EmptyInline text={`Nothing planned with ${first} yet.`} action="Add a plan" onClick={onAddPlan} />}</div></section>
       <section className="content-card"><div className="card-header"><div><span className="card-kicker">LOOKING BACK</span><h2>Your history together</h2></div></div>{history.length ? <ol className="person-timeline">{history.map((item) => <li key={`${item.kind}-${item.id}`} className={`timeline-item timeline-${item.kind}`}><span className="timeline-icon">{item.kind === 'plan' ? <CalendarDays size={13} /> : <BookOpen size={13} />}</span><div><span className="timeline-meta">{item.date} · {item.kind === 'plan' ? 'Plan' : 'Reflection'}</span><strong>{item.title}</strong>{item.text && <p>{item.text}</p>}</div></li>)}</ol> : <p className="person-empty">Nothing here yet. After you spend time together, write how it felt below.</p>}</section>
     </div>
     <section className="reflection-compose person-reflect"><form onSubmit={onSaveReflection}><label>How did your last time with {first} feel?<textarea name="text" placeholder="A few honest lines are enough…" required /></label><input type="hidden" name="person_id" value={person.id} /><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section>
-    <button className="text-button person-remove" onClick={onDelete}><Trash2 size={14} /> Remove {first} from your circle</button>
+    <div className="person-footer-actions"><button className="text-button person-remove" onClick={() => onArchive(!person.archived)}>{person.archived ? <><ArchiveRestore size={14} /> Return {first} to your circle</> : <><Archive size={14} /> Archive {first}</>}</button><button className="text-button person-remove" onClick={onDelete}><Trash2 size={14} /> Remove {first} from your circle</button></div>
   </div>;
 }
 
-function PlansPage({ plans, people, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section><div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
+function PlansPage({ plans, people, limit, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; limit: number | null; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section>{limit && <div className="goal-limit"><CalendarDays size={16} /><span>{upcoming.length} of {limit} upcoming plans on Free · past plans don’t count</span><div className="goal-progress"><i style={{ width: `${Math.min(upcoming.length / limit * 100, 100)}%` }} /></div></div>}<div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
 
 function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {fmtTime(plan.plan_time)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
 
-function GoalsPage({ goals, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void; onToggle: (goal: Goal) => void }) { const activeCount = goals.filter((goal) => goal.status === 'active').length; return <div className="page-wrap goals-page"><section className="page-heading-row"><div><p className="eyebrow">THIS MONTH</p><h1>Goals</h1><p className="intro">A few gentle priorities to help your time reflect what matters.</p></div>{activeCount < 3 && <button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button>}</section><div className="goal-limit"><Target size={16} /><span>{activeCount} of 3 active monthly priorities</span><div className="goal-progress"><i style={{ width: `${Math.min(activeCount / 3 * 100, 100)}%` }} /></div></div>{goals.length ? <div className="goals-grid">{goals.map((goal) => <article className={`goal-card ${goal.status === 'completed' ? 'goal-completed' : ''}`} key={goal.id}><div className="goal-card-top"><span className="category-label">{goal.category}</span><div className="card-actions"><button className="card-action" onClick={() => onEdit(goal.id)} aria-label={`Edit ${goal.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(goal.id)} aria-label={`Delete ${goal.title}`}><Trash2 size={15} /></button></div></div><h2>{goal.title}</h2><p>{goal.description || 'No description added.'}</p><button className="goal-status" onClick={() => onToggle(goal)}>{goal.status === 'active' ? <><span className="status-circle" /> Active priority</> : <><Check size={14} /> Completed</>}</button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Target size={21} /></div><h2>What deserves your attention?</h2><p>Keep it light. Start with one priority for this month.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button></div>}</div>; }
+function GoalsPage({ goals, limit, onAdd, onEdit, onDelete, onToggle }: { goals: Goal[]; limit: number | null; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void; onToggle: (goal: Goal) => void }) { const activeCount = goals.filter((goal) => goal.status === 'active').length; return <div className="page-wrap goals-page"><section className="page-heading-row"><div><p className="eyebrow">THIS MONTH</p><h1>Goals</h1><p className="intro">A few gentle priorities to help your time reflect what matters.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button></section><div className="goal-limit"><Target size={16} /><span>{limit ? `${activeCount} of ${limit} active goals on Free` : `${activeCount} active ${activeCount === 1 ? 'goal' : 'goals'}`}</span>{limit && <div className="goal-progress"><i style={{ width: `${Math.min(activeCount / limit * 100, 100)}%` }} /></div>}</div>{goals.length ? <div className="goals-grid">{goals.map((goal) => <article className={`goal-card ${goal.status === 'completed' ? 'goal-completed' : ''}`} key={goal.id}><div className="goal-card-top"><span className="category-label">{goal.category}</span><div className="card-actions"><button className="card-action" onClick={() => onEdit(goal.id)} aria-label={`Edit ${goal.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(goal.id)} aria-label={`Delete ${goal.title}`}><Trash2 size={15} /></button></div></div><h2>{goal.title}</h2><p>{goal.description || 'No description added.'}</p><button className="goal-status" onClick={() => onToggle(goal)}>{goal.status === 'active' ? <><span className="status-circle" /> Active priority</> : <><Check size={14} /> Completed</>}</button></article>)}</div> : <div className="empty-state"><div className="empty-icon"><Target size={21} /></div><h2>What deserves your attention?</h2><p>Keep it light. Start with one priority for this month.</p><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add goal</button></div>}</div>; }
 
 function EmptyInline({ text, action, onClick }: { text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span>{text}</span><button className="card-link" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
-function DeeperSection({ enabled, state, onRequest, onEnable }: DeeperControls) {
-  if (!enabled) return <button className="deeper-invite" onClick={onEnable}><Sparkles size={14} /> Want a fuller answer? Turn on Claude AI in Settings</button>;
-  if (state.status === 'done' && state.answer) {
-    const { verdict, headline, reason, points } = state.answer;
-    return <div className={`deeper-answer deeper-${verdict}`}><span className="card-kicker"><Sparkles size={12} /> DEEPER ANSWER — CLAUDE AI</span><h4>{headline}</h4><p>{reason}</p>{points.length > 0 && <ul>{points.slice(0, 4).map((point) => <li key={point}>{point}</li>)}</ul>}<small>Written by Claude from the notes above. It can be wrong — trust your own sense of things.</small></div>;
-  }
-  return <div className="deeper-request"><button className="deeper-button" onClick={onRequest} disabled={state.status === 'loading'}><Sparkles size={15} /> {state.status === 'loading' ? 'Thinking it through…' : 'Deeper answer with Claude'}</button><span className={state.status === 'error' ? 'deeper-error' : ''} role={state.status === 'error' ? 'alert' : undefined}>{state.status === 'error' ? state.error : 'Sends this question and the related notes to Claude AI.'}</span></div>;
-}
-
-function DecisionPanel({ decision, deeper, onClear }: { decision: NonNullable<DecisionResult>; deeper: DeeperControls; onClear: () => void }) {
+function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<DecisionResult>; ai: ReactNode; onClear: () => void }) {
   const { verdict } = decision;
   const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER' }[decision.kind];
   // Recall questions are answered by the saved memories themselves, so show them up front.
@@ -1047,7 +1074,7 @@ function DecisionPanel({ decision, deeper, onClear }: { decision: NonNullable<De
     <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
     {decision.glance.length > 0 && <dl className="decision-glance">{decision.glance.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
-    <DeeperSection {...deeper} />
+    {ai}
     {memoriesFirst && memories}
     {hasDetails && <details className="decision-details"><summary>See the full reasoning <ChevronRight size={14} /></summary>
       {decision.summary && <p className="decision-summary">{decision.summary}</p>}
@@ -1063,8 +1090,8 @@ function DecisionPanel({ decision, deeper, onClear }: { decision: NonNullable<De
   </div>;
 }
 
-function ReflectionsPage({ reflections, people, onSave, onDelete }: { reflections: Reflection[]; people: Person[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void }) {
-  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><BookOpen size={20} /></div><p>No reflections yet. Start with one above.</p></div>}</section></div>;
+function ReflectionsPage({ reflections, people, onSave, onDelete, ai }: { reflections: Reflection[]; people: Person[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void; ai: ReactNode }) {
+  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{ai && <div className="reflection-ai">{ai}</div>}{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><BookOpen size={20} /></div><p>No reflections yet. Start with one above.</p></div>}</section></div>;
 }
 
 function ColorField({ value }: { value: string }) {
@@ -1073,7 +1100,7 @@ function ColorField({ value }: { value: string }) {
 
 function PersonModal({ person, defaultColor, onClose, onSubmit }: { person?: Person; defaultColor: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={person ? 'Edit person' : 'Add someone'} eyebrow="YOUR CIRCLE" onClose={onClose}><form onSubmit={onSubmit}><label>Name<input name="name" defaultValue={person?.name} autoFocus placeholder="e.g. Alex Morgan" required /></label><label>Relationship<span className="label-optional">Optional</span><input name="relationship" defaultValue={person?.relationship} placeholder="e.g. close friend, colleague" /></label><label>Context<span className="label-optional">Optional</span><input name="detail" defaultValue={person?.detail} placeholder="What helps you remember this relationship?" /></label><label>Note<span className="label-optional">Optional</span><textarea name="note" defaultValue={person?.note} placeholder="A small thing worth remembering" /></label><ColorField value={person?.color || defaultColor} /><ModalActions onClose={onClose} label={person ? 'Save changes' : 'Add person'} /></form></ModalFrame>; }
 
-function PlanModal({ plan, presetPersonId, people, onClose, onSubmit }: { plan?: Plan; presetPersonId: string | null; people: Person[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={plan ? 'Edit plan' : 'Add a plan'} eyebrow="YOUR TIME" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={plan?.title} autoFocus placeholder="e.g. Dinner with Maya" required /></label><div className="form-row"><label>Date<input type="date" name="plan_date" defaultValue={plan?.plan_date} required /></label><label>Time<input type="time" name="plan_time" defaultValue={plan?.plan_time?.slice(0, 5)} required /></label></div><div className="form-row"><label>Person<select name="person_id" defaultValue={plan?.person_id || presetPersonId || ''}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>Category<select name="category" defaultValue={plan?.category || 'Personal'}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div><label>Context<span className="label-optional">Optional</span><textarea name="context" defaultValue={plan?.context} placeholder="What do you want to keep in mind?" /></label><ModalActions onClose={onClose} label={plan ? 'Save changes' : 'Add plan'} /></form></ModalFrame>; }
+function PlanModal({ plan, presetPersonId, people, error, onClose, onSubmit }: { plan?: Plan; presetPersonId: string | null; people: Person[]; error: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={plan ? 'Edit plan' : 'Add a plan'} eyebrow="YOUR TIME" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={plan?.title} autoFocus placeholder="e.g. Dinner with Maya" required /></label><div className="form-row"><label>Date<input type="date" name="plan_date" defaultValue={plan?.plan_date} required /></label><label>Time<input type="time" name="plan_time" defaultValue={plan?.plan_time?.slice(0, 5)} required /></label></div><div className="form-row"><label>Person<select name="person_id" defaultValue={plan?.person_id || presetPersonId || ''}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>Category<select name="category" defaultValue={plan?.category || 'Personal'}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label></div><label>Context<span className="label-optional">Optional</span><textarea name="context" defaultValue={plan?.context} placeholder="What do you want to keep in mind?" /></label>{error && <p className="form-error" role="alert">{error}</p>}<ModalActions onClose={onClose} label={plan ? 'Save changes' : 'Add plan'} /></form></ModalFrame>; }
 
 function GoalModal({ goal, error, onClose, onSubmit }: { goal?: Goal; error: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={goal ? 'Edit goal' : 'Add a monthly goal'} eyebrow="THIS MONTH" onClose={onClose}><form onSubmit={onSubmit}><label>Title<input name="title" defaultValue={goal?.title} autoFocus placeholder="e.g. Protect two evenings for rest" required /></label><label>Category<select name="category" defaultValue={goal?.category || 'Relationships'}>{goalCategories.map((category) => <option key={category}>{category}</option>)}</select></label><label>Description<span className="label-optional">Optional</span><textarea name="description" defaultValue={goal?.description} placeholder="What would this look like in practice?" /></label>{goal && <label>Status<select name="status" defaultValue={goal.status}><option value="active">Active</option><option value="completed">Completed</option></select></label>}{error && <p className="form-error" role="alert">{error}</p>}<ModalActions onClose={onClose} label={goal ? 'Save changes' : 'Add goal'} /></form></ModalFrame>; }
 
@@ -1197,7 +1224,7 @@ function YouPage({ profile, onSaveProfile, todayCheckIn, onCheckIn, checkins, pe
   </div>;
 }
 
-function SettingsPage({ aiEnabled, onToggleAi, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { aiEnabled: boolean; onToggleAi: (on: boolean) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
+function SettingsPage({ plan, aiEnabled, onToggleAi, counts, onExport, onImport, onDeleteAll, onRestoreExamples }: { plan: ReturnType<typeof usePlan>; aiEnabled: boolean; onToggleAi: (on: boolean) => string; counts: Record<CollectionKey, number>; onExport: () => string; onImport: (file: File) => Promise<string>; onDeleteAll: () => string; onRestoreExamples: () => string }) {
   const [status, setStatus] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -1208,10 +1235,11 @@ function SettingsPage({ aiEnabled, onToggleAi, counts, onExport, onImport, onDel
   };
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
-    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on Deeper answers below and ask for one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on AI features below and use one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <SubscriptionCard plan={plan} />
     <AccountCard />
     <BackupCard onExport={onExport} />
-    <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">OPTIONAL · CLAUDE AI</span><h2>Deeper answers</h2><p>When this is on, a “Deeper answer” button appears under Kinly’s instant answers. Tapping it sends that one question — with the notes, plans and reflections about the person involved — to Anthropic’s Claude AI to write a fuller, more personal reply. Nothing is sent unless you tap the button, and nothing is stored by Kinly.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
+    <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">KINLY PLUS · CLAUDE AI</span><h2>AI features</h2><p>Kinly Plus includes AI reflections, conversation preparation, decision and relationship analysis, and weekly reviews, written by Anthropic’s Claude AI. Each one sends only the notes, plans and reflections it needs, and only when you tap it; Kinly doesn’t store them. Each button shows its cost in AI credits before you tap, and failed requests never use credits.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>
       <section className="content-card settings-card"><span className="card-kicker">RESTORE</span><h2>Import a backup</h2><p>Load a backup file you exported earlier. It replaces what is saved in this browser now.</p><div className="settings-actions"><button className="quiet-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Import backup</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={choseFile} /></div></section>

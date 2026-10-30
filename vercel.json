@@ -29,6 +29,10 @@
       "destination": "/index.html"
     },
     {
+      "source": "/pricing",
+      "destination": "/index.html"
+    },
+    {
       "source": "/terms",
       "destination": "/index.html"
     },

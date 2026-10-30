@@ -32,22 +32,35 @@ aren't available and sends nothing. See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md)
 dashboard steps, Google OAuth, environment variables and redirect URLs. Signing in does not yet
 move or sync Kinly data — that stays in the browser.
 
-## Optional: Deeper answers with Claude AI
+## Plans: Kinly Free and Kinly Plus
 
-Kinly's instant answers work without any setup. The optional "Deeper answer" button sends one
-question, with the notes about the person involved, to Claude through the serverless function in
-`api/deeper.ts`. People must turn it on in Settings first.
+| | Free (₹0) | Plus (₹99/month or ₹999/year) |
+|---|---|---|
+| Active people | 10 (archived people don't count) | Unlimited |
+| Active plans | 5 upcoming (past plans don't count) | Unlimited |
+| Active goals | 3 (completed goals don't count) | Unlimited |
+| AI features | — | 20 credits per billing month |
 
-To enable it:
-
-1. Create an API key at [console.anthropic.com](https://console.anthropic.com) and set a monthly spend limit there.
-2. **On Vercel:** Project → Settings → Environment Variables → add `ANTHROPIC_API_KEY`, then redeploy.
-3. **Locally:** create a file named `.env.local` containing `ANTHROPIC_API_KEY=...` and restart `npm run dev`.
-   `.env.local` is ignored by Git, so the key is never committed.
-
-The function uses Claude Haiku 5.5, accepts requests only from Kinly's own pages, checks request
-size and shape, and applies best-effort daily limits (20 per visitor, 500 in total per instance).
-The Anthropic spend limit is the hard ceiling on cost.
+- **Where the plan comes from:** `supabase/migrations/20261030120000_subscriptions_and_ai_credits.sql`
+  gives every account a `subscriptions` row (Free by default, created by a trigger on sign-up).
+  Accounts can read their own plan and usage but can't change them. Plans are changed only on the
+  server.
+- **Limits:** a limit never deletes, hides or locks saved data; it only stops adding more.
+  The page is `/pricing`. Plus can't be bought yet, so its buttons say "Coming soon".
+- **AI credits:** `api/ai.ts` handles all five Plus AI features. It calls `ai_begin` in the
+  database as the signed-in person, which checks the plan and credits (rows are locked, so
+  simultaneous requests can't overspend). It then calls Claude, and only after a successful answer
+  marks the request as used (`ai_finish`). Failures cost nothing. Costs:
+  - reflection: 1 credit
+  - conversation prep: 1 credit
+  - decision analysis: 2 credits
+  - relationship analysis: 2 credits
+  - weekly review: 2 credits
+- **Checks:** `supabase/tests/subscription_check.sql` runs all of this as two throwaway accounts
+  and rolls everything back.
+- **Setup:** add `ANTHROPIC_API_KEY` in Vercel (set a monthly spend limit at
+  [console.anthropic.com](https://console.anthropic.com)). The function also reads the public
+  `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
 
 ## Payments (Razorpay Standard Checkout)
 

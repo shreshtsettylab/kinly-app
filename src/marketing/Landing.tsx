@@ -145,20 +145,18 @@ export default function Landing() {
       </section>
 
       <section className="lp-section" id="pricing" aria-labelledby="pricing-title">
-        <Reveal><SectionIntro id="pricing-title" kicker="Pricing" title="Free to use." muted="More, later.">No card, no account, no trial clock.</SectionIntro></Reveal>
+        <Reveal><SectionIntro id="pricing-title" kicker="Pricing" title="Start free." muted="Grow into Plus.">No card, no account, no trial clock.</SectionIntro></Reveal>
         <div className="lp-pricing">
           <Reveal><article className="lp-plan lp-plan-free">
-            <div className="lp-plan-head"><h3>Free</h3><p className="lp-price">₹0</p><p>Everything Kinly does today.</p></div>
-            <ul>{['People, plans and up to three monthly goals', 'Decision support with clear verdicts', 'Reflections, patterns and your daily check-in', 'Backup, restore and delete — all in your browser'].map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
+            <div className="lp-plan-head"><h3>Free</h3><p className="lp-price">₹0</p><p>For keeping your circle close, every day.</p></div>
+            <ul>{['Up to 10 people, 5 active plans and 3 active goals', 'Unlimited decision support with clear verdicts', 'Unlimited reflections, notes and your daily check-in', 'Backup, restore and delete — all in your browser'].map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
             <Link to="/app" className="lp-button lp-button-primary lp-button-block">{returning ? 'Open Kinly' : 'Get started'}</Link>
           </article></Reveal>
           <Reveal delay={90}><article className="lp-plan lp-plan-plus">
-            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Proposed</span></h3><p className="lp-price lp-price-muted">{checkoutAvailable ? 'Support early' : 'Coming later'}</p><p>{checkoutAvailable ? 'Ideas we’re exploring. These features aren’t available yet — supporting now helps build them.' : 'Ideas we’re exploring. Not available yet, and no price is set.'}</p></div>
-            <ul>{['Sync across devices, once accounts exist', 'Optional deeper AI answers', 'Longer-term patterns and reviews'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
-            {checkoutAvailable ? <SupportButton /> : <>
-              <span className="lp-button lp-button-disabled lp-button-block" aria-disabled="true">Coming later</span>
-              <p className="lp-plan-note">There’s no waitlist or payment yet. We’ll share news here first.</p>
-            </>}
+            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Coming soon</span></h3><p className="lp-price">₹99<span className="lp-price-per">/month</span></p><p>Or ₹999 a year. Unlimited people, plans and goals, plus 20 AI credits a month.</p></div>
+            <ul>{['AI reflections and weekly relationship reviews', 'Advanced decision and relationship analysis', 'AI conversation preparation', 'Unlimited people, plans and goals'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
+            <Link to="/pricing" className="lp-button lp-button-quiet lp-button-block">Compare plans</Link>
+            {checkoutAvailable && <div className="lp-support-early"><p>Plus payments aren’t open yet. Want to help build it now?</p><SupportButton /></div>}
           </article></Reveal>
         </div>
       </section>

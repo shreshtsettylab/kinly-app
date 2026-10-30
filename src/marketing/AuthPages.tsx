@@ -4,6 +4,8 @@ import { displayName, takeNext, useAuth } from '../auth/authState';
 import { errorFromUrl, friendlyAuthError, friendlyUrlError } from '../auth/authErrors';
 import { supabase } from '../auth/supabaseClient';
 import { Link } from '../Link';
+import { SubscriptionCard } from '../plan/PlanParts';
+import { usePlan } from '../subscription';
 import { navigateTo } from '../router';
 import { MarketingFooter, MarketingNav } from './parts';
 import { hasSavedData } from './savedData';
@@ -106,6 +108,7 @@ export function ResetPassword() {
 // itself stays open without an account because its data lives only in this browser.
 export function Account() {
   const auth = useAuth();
+  const plan = usePlan({ withUsage: true });
   const [signingOut, setSigningOut] = useState(false);
   useEffect(() => {
     if (auth.status === 'signedOut' && !signingOut) navigateTo('/signin?next=/account', { replace: true });
@@ -122,6 +125,7 @@ export function Account() {
       <div><dt>Signed in with</dt><dd>{providers || '—'}</dd></div>
       <div><dt>Member since</dt><dd>{new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</dd></div>
     </dl>
+    <div className="lp-account-plan"><SubscriptionCard plan={plan} showUsage /></div>
     <div className="lp-auth-notice" role="note"><Info size={16} /><div><b>Your Kinly data lives in this browser.</b> Nothing is uploaded automatically. To keep a private copy in your account, use <b>Settings → Back up my data</b> in the app. Automatic syncing across devices will come later.</div></div>
     <div className="lp-auth-done-actions">
       <Link to="/app" className="lp-button lp-button-primary">Open Kinly <ArrowRight size={15} /></Link>

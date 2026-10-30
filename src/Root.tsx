@@ -5,6 +5,7 @@ import Landing from './marketing/Landing';
 import NotFound from './marketing/NotFound';
 import Policy from './marketing/Policies';
 import CheckoutComplete from './marketing/CheckoutComplete';
+import Pricing from './marketing/Pricing';
 import SignIn from './marketing/SignIn';
 import { useRoute, type Route } from './router';
 
@@ -19,6 +20,7 @@ const titles: Record<Route, string> = {
   reset: 'Reset your password — Kinly',
   account: 'Your account — Kinly',
   checkout: 'Checkout — Kinly',
+  pricing: 'Pricing — Kinly Free and Plus',
   terms: 'Terms of use — Kinly',
   privacy: 'Privacy policy — Kinly',
   refunds: 'Refund policy — Kinly',
@@ -33,6 +35,7 @@ function Screen({ route }: { route: Route }) {
   if (route === 'reset') return <ResetPassword />;
   if (route === 'account') return <Account />;
   if (route === 'checkout') return <CheckoutComplete />;
+  if (route === 'pricing') return <Pricing />;
   if (route === 'terms' || route === 'privacy' || route === 'refunds' || route === 'contact') return <Policy page={route} />;
   if (route === 'notfound') return <NotFound />;
   return <Landing />;
