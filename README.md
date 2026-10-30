@@ -20,6 +20,8 @@ Then open http://localhost:5173. Everything you add is stored only in your brows
 | `/auth/callback` | Where Google and email links return after signing in |
 | `/reset-password` | Choose a new password from a reset link |
 | `/account` | Account details and sign out — requires being signed in |
+| `/checkout/complete` | Shown after a Razorpay payment is verified |
+| `/terms`, `/privacy`, `/refunds`, `/contact` | Policy and contact pages |
 
 `vercel.json` tells Vercel to serve the app for these paths, so links work when opened directly.
 
@@ -46,3 +48,26 @@ To enable it:
 The function uses Claude Haiku 5.5, accepts requests only from Kinly's own pages, checks request
 size and shape, and applies best-effort daily limits (20 per visitor, 500 in total per instance).
 The Anthropic spend limit is the hard ceiling on cost.
+
+## Payments (Razorpay Standard Checkout)
+
+The "Support Kinly early" button on the landing page takes a one-time payment:
+
+1. `api/create-order.ts` creates a Razorpay order on the server. The amount is set there
+   (`RAZORPAY_AMOUNT_PAISE`, default 9900 = ₹99), so the browser can't change the price.
+2. The browser opens Razorpay's checkout window with that order (`src/checkout.ts`).
+3. `api/verify-payment.ts` checks Razorpay's signature (HMAC-SHA256 with the key secret) before
+   Kinly shows the payment as confirmed.
+
+Environment variables (see `.env.example`): `VITE_RAZORPAY_KEY_ID` (public), `RAZORPAY_KEY_ID`,
+`RAZORPAY_KEY_SECRET` (server only, never in browser code) and optionally `RAZORPAY_AMOUNT_PAISE`.
+Test keys (`rzp_test_…`) show a "Test mode" label and never move real money; switching to live
+keys in Vercel and redeploying turns that off.
+
+## Analytics and search
+
+- **Microsoft Clarity** (`index.html`) records page and button usage with Strict masking. The app,
+  sign-in, account and checkout screens are also marked `data-clarity-mask`, so personal notes are
+  never captured.
+- **Google Search Console** verifies the site with a meta tag in `index.html`; `public/sitemap.xml`
+  and `public/robots.txt` are submitted for indexing.

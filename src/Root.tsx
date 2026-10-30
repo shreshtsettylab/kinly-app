@@ -1,5 +1,4 @@
-import { useEffect } from 'react';
-import App from './App';
+import { lazy, Suspense, useEffect } from 'react';
 import { AuthProvider } from './auth/AuthProvider';
 import { Account, AuthCallback, ResetPassword } from './marketing/AuthPages';
 import Landing from './marketing/Landing';
@@ -8,6 +7,9 @@ import Policy from './marketing/Policies';
 import CheckoutComplete from './marketing/CheckoutComplete';
 import SignIn from './marketing/SignIn';
 import { useRoute, type Route } from './router';
+
+// The app itself loads only when someone opens /app, so the landing and policy pages stay light.
+const App = lazy(() => import('./App'));
 
 const titles: Record<Route, string> = {
   landing: 'Kinly — Your people. A more intentional tomorrow.',
@@ -25,7 +27,7 @@ const titles: Record<Route, string> = {
 };
 
 function Screen({ route }: { route: Route }) {
-  if (route === 'app') return <App />;
+  if (route === 'app') return <Suspense fallback={null}><App /></Suspense>;
   if (route === 'signin') return <SignIn />;
   if (route === 'callback') return <AuthCallback />;
   if (route === 'reset') return <ResetPassword />;
