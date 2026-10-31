@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
 // Runs the api/*.ts functions inside the dev server so they work locally the same way they do
-// on Vercel (api/ai.ts also reads the public VITE_SUPABASE_ values). Put ANTHROPIC_API_KEY and the RAZORPAY_ keys in .env.local (never committed).
+// on Vercel (api/ai.ts also reads the public VITE_SUPABASE_ values). Put OPENROUTER_API_KEY and the RAZORPAY_ keys in .env.local (never committed).
 const API_ROUTES = ['ai', 'create-order', 'verify-payment'];
 
 function localApi(): Plugin {
@@ -32,7 +32,7 @@ function localApi(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  Object.assign(process.env, loadEnv(mode, process.cwd(), ['ANTHROPIC_', 'RAZORPAY_', 'VITE_SUPABASE_']));
+  Object.assign(process.env, loadEnv(mode, process.cwd(), ['OPENROUTER_', 'RAZORPAY_', 'VITE_SUPABASE_']));
   return {
     plugins: [react(), localApi()],
     resolve: {

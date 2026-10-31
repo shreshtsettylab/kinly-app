@@ -1,18 +1,17 @@
 import { randomBytes } from 'node:crypto';
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 
 // Kinly Plus AI features, metered by AI credits.
 // 1. The browser sends the person's Supabase session and the saved context for one feature.
 // 2. ai_begin (in the database, run as that person) checks their plan and credits and records a
 //    pending request. Simultaneous requests are counted one at a time, so they can't overspend.
-// 3. Claude writes the answer. Only then does ai_finish mark the request succeeded; any failure
-//    marks it failed, which costs nothing. ai_finish needs a one-time secret that never leaves
-//    this function, so nobody can cancel the charge after getting the answer.
-// The Anthropic key lives only in this function's environment and never reaches the browser.
+// 3. Claude (through OpenRouter) writes the answer. Only then does ai_finish mark the request
+//    succeeded; any failure marks it failed, which costs nothing. ai_finish needs a one-time
+//    secret that never leaves this function, so nobody can cancel the charge after getting the answer.
+// The OpenRouter key lives only in this function's environment and never reaches the browser.
 
-const MODEL = 'claude-haiku-5-5';
+const MODEL = 'anthropic/claude-haiku-5.5';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_BODY_CHARS = 24_000;
 
 const Feature = z.enum(['reflection', 'conversation_prep', 'decision_analysis', 'relationship_analysis', 'weekly_review']);
@@ -43,6 +42,19 @@ const Answer = z.object({
   reason: z.string(),
   points: z.array(z.string()),
 });
+
+// The same shape as Answer, as the JSON schema OpenRouter uses to force a structured reply.
+const ANSWER_SCHEMA = {
+  type: 'object',
+  properties: {
+    verdict: { type: 'string', enum: ['go', 'hold', 'maybe', 'info'] },
+    headline: { type: 'string' },
+    reason: { type: 'string' },
+    points: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['verdict', 'headline', 'reason', 'points'],
+  additionalProperties: false,
+};
 
 const VOICE = `You help one person think about the people in their life, using only what they have saved in Kinly: notes about people, plans, goals and short reflections on how time together felt.
 
@@ -99,7 +111,7 @@ type Begin = { ok: true; usage_id: string; cost: number } | { ok: false; reason:
 type CreditStatus = { ai_access: boolean; allowance: number; used: number; remaining: number; resets_at: string | null };
 
 export async function POST(request: Request): Promise<Response> {
-  if (!process.env.ANTHROPIC_API_KEY) return json({ error: 'AI features are not set up on this site yet.' }, 503);
+  if (!process.env.OPENROUTER_API_KEY) return json({ error: 'AI features are not set up on this site yet.' }, 503);
   if (!process.env.VITE_SUPABASE_URL || !(process.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_ANON_KEY)) return json({ error: 'Accounts are not set up on this site yet.' }, 503);
 
   // Only accept calls from Kinly's own pages.
@@ -136,24 +148,40 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: `${error} No credits were used.` }, status);
   };
 
-  const client = new Anthropic();
+  let response: Response;
   try {
-    const response = await client.messages.parse({
-      model: MODEL,
-      max_tokens: 4000,
-      system: `${VOICE}\n\n${TASKS[input.feature]}`,
-      output_config: { effort: 'low', format: zodOutputFormat(Answer) },
-      messages: [{ role: 'user', content: `Saved context:\n${JSON.stringify(input.context, null, 2)}` }],
+    response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json', 'http-referer': origin, 'x-title': 'Kinly' },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 2000,
+        messages: [
+          { role: 'system', content: `${VOICE}\n\n${TASKS[input.feature]}` },
+          { role: 'user', content: `Saved context:\n${JSON.stringify(input.context, null, 2)}` },
+        ],
+        response_format: { type: 'json_schema', json_schema: { name: 'kinly_answer', strict: true, schema: ANSWER_SCHEMA } },
+      }),
+      signal: AbortSignal.timeout(45_000),
     });
-    if (response.stop_reason === 'refusal') return fail('Claude could not answer this one.', 422);
-    if (!response.parsed_output) return fail('Claude’s reply could not be read. Try again.', 502);
-    await finish(true);
-    const status = await rpc<CreditStatus>('ai_credit_status', {}, accessToken);
-    return json({ answer: response.parsed_output, cost: begin.data.cost, credits: status.ok ? status.data : null });
-  } catch (error) {
-    if (error instanceof Anthropic.RateLimitError) return fail('Claude is busy right now. Try again in a minute.', 429);
-    if (error instanceof Anthropic.AuthenticationError) return fail('AI features are not set up correctly on this site.', 503);
-    if (error instanceof Anthropic.APIError) return fail('Claude could not be reached. Try again shortly.', 502);
-    return fail('Something went wrong. Try again.', 500);
+  } catch {
+    return fail('Claude could not be reached. Try again shortly.', 502);
   }
+  if (response.status === 401 || response.status === 403) return fail('AI features are not set up correctly on this site.', 503);
+  if (response.status === 402) return fail('AI features are paused for a moment on Kinly’s side. Try again later.', 503);
+  if (response.status === 429) return fail('Claude is busy right now. Try again in a minute.', 429);
+  if (!response.ok) return fail('Claude could not be reached. Try again shortly.', 502);
+
+  const data = await response.json().catch(() => null) as { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string | null } }[] } | null;
+  const choice = data?.choices?.[0];
+  if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') return fail('Claude could not answer this one.', 422);
+  let answer: z.infer<typeof Answer>;
+  try {
+    answer = Answer.parse(JSON.parse(choice?.message?.content ?? ''));
+  } catch {
+    return fail('Claude’s reply could not be read. Try again.', 502);
+  }
+  await finish(true);
+  const status = await rpc<CreditStatus>('ai_credit_status', {}, accessToken);
+  return json({ answer, cost: begin.data.cost, credits: status.ok ? status.data : null });
 }

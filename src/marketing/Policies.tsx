@@ -8,7 +8,7 @@ import { hasSavedData } from './savedData';
 const OPERATOR = 'Shresht Setty';
 const EMAIL = 'shresht.setty2027@mastersunion.org';
 const LOCATION = 'Bengaluru, Karnataka, India';
-const UPDATED = '30 October 2026';
+const UPDATED = '31 October 2026';
 
 export type PolicyPage = 'terms' | 'privacy' | 'refunds' | 'contact';
 
@@ -60,9 +60,9 @@ const pages: Record<PolicyPage, { tag: string; title: string; body: ReactNode }>
       <h2>Usage analytics</h2>
       <p>We use Microsoft Clarity to understand which pages and buttons people use, so we can improve Kinly. Clarity uses cookies to recognise repeat visits. Text inside the app, sign-in, account and checkout screens is masked, so Clarity never sees your notes, names or reflections.</p>
       <h2>AI features (Kinly Plus)</h2>
-      <p>Kinly Plus AI features run only when you tap one. That feature’s question and related notes are sent to Anthropic to write the answer, and Kinly doesn’t store them. To count AI credits, we record which feature you used, how many credits it took, whether it worked, and when. We never record what was sent or the answer.</p>
+      <p>Kinly Plus AI features run only when you tap one. That feature’s question and related notes are sent through OpenRouter to Anthropic’s Claude to write the answer, and Kinly doesn’t store them. To count AI credits, we record which feature you used, how many credits it took, whether it worked, and when. We never record what was sent or the answer.</p>
       <h2>What we don’t do</h2>
-      <p>We don’t sell your data, show ads, or share your information except with the service providers named above (Supabase, Razorpay, Microsoft Clarity, Anthropic and our host, Vercel), and where the law requires it.</p>
+      <p>We don’t sell your data, show ads, or share your information except with the service providers named above (Supabase, Razorpay, Microsoft Clarity, OpenRouter, Anthropic and our host, Vercel), and where the law requires it.</p>
       <h2>Your choices</h2>
       <ul>
         <li>Export or delete the data in your browser at any time from Settings.</li>

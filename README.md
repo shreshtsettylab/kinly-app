@@ -58,8 +58,9 @@ move or sync Kinly data — that stays in the browser.
   - weekly review: 2 credits
 - **Checks:** `supabase/tests/subscription_check.sql` runs all of this as two throwaway accounts
   and rolls everything back.
-- **Setup:** add `ANTHROPIC_API_KEY` in Vercel (set a monthly spend limit at
-  [console.anthropic.com](https://console.anthropic.com)). The function also reads the public
+- **Setup:** add `OPENROUTER_API_KEY` in Vercel. Answers come from Claude Haiku 5.5
+  (`anthropic/claude-haiku-5.5`) through [OpenRouter](https://openrouter.ai). Give the key a
+  credit limit on OpenRouter, which is the hard ceiling on cost. The function also reads the public
   `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
 
 ## Payments (Razorpay Standard Checkout)
