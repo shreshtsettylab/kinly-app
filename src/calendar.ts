@@ -3,7 +3,8 @@
 // Kinly's servers, and the access token lives only in memory for this visit.
 
 // The OAuth client id is a public identifier (it's visible in every Google sign-in URL), not a secret.
-const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() || '';
+// It belongs to the "Kinly Calendar Import" client in the Kinly Google Cloud project.
+const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() || '314014525805-iblndtflm7kdp9nh2ejptqt8s3pfa1r6.apps.googleusercontent.com';
 const SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
 
 export const calendarAvailable = CLIENT_ID.endsWith('.apps.googleusercontent.com');
@@ -30,6 +31,11 @@ function loadGoogleScript(): Promise<void> {
     document.head.appendChild(script);
   });
   return scriptLoading;
+}
+
+// Loads Google's script ahead of time, so the consent window can open the moment someone clicks.
+export function preloadCalendar(): Promise<void> {
+  return loadGoogleScript().catch(() => undefined);
 }
 
 let token: { value: string; expires: number } | null = null;

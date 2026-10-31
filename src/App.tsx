@@ -34,7 +34,7 @@ import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
 import { asksForWords, findSituation, generalLines, minutesIn } from './scripts';
-import { calendarAvailable, upcomingEvents, type CalendarEvent } from './calendar';
+import { calendarAvailable, preloadCalendar, upcomingEvents, type CalendarEvent } from './calendar';
 import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
 type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
@@ -1220,13 +1220,14 @@ function ColorField({ value }: { value: string }) {
 
 // Lists the next 30 days of Google Calendar events; the person ticks which become plans.
 function CalendarImportModal({ people, plans, roomLeft, onImport, onClose }: { people: Person[]; plans: Plan[]; roomLeft: number | null; onImport: (chosen: { event: CalendarEvent; personId: string | null }[]) => void; onClose: () => void }) {
-  const [state, setState] = useState<{ status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; events: CalendarEvent[] }>({ status: 'loading' });
+  const [state, setState] = useState<{ status: 'idle' } | { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; events: CalendarEvent[] }>({ status: 'idle' });
   const [picked, setPicked] = useState<Record<string, string | null>>({});
   const load = () => {
     setState({ status: 'loading' });
     upcomingEvents().then((events) => setState({ status: 'ready', events }), (failure: unknown) => setState({ status: 'error', message: failure instanceof Error ? failure.message : 'Google Calendar couldn’t be read.' }));
   };
-  useEffect(load, []);
+  // Google's window must open straight from a click, or browsers block it, so loading starts on "Connect".
+  useEffect(() => { void preloadCalendar(); }, []);
   // Suggests the person whose first name appears in the event title or its guest list.
   const suggest = (event: CalendarEvent) => people.find((person) => {
     const first = person.name.split(' ')[0].toLowerCase();
@@ -1244,7 +1245,8 @@ function CalendarImportModal({ people, plans, roomLeft, onImport, onClose }: { p
   return <ModalFrame title="Import from Google Calendar" eyebrow="YOUR TIME" onClose={onClose}>
     <form onSubmit={submit} className="calendar-import">
       <p className="calendar-note">Your next 30 days of events, read straight from Google into this browser. Choose the ones worth planning around; nothing is sent to Kinly.</p>
-      {state.status === 'loading' && <p className="calendar-note" role="status">Waiting for Google… A Google window may open to ask for read-only access.</p>}
+      {state.status === 'idle' && <div className="calendar-connect"><p className="calendar-note">Google will ask you to allow read-only access to your events. Kinly can’t change or delete anything in your calendar.</p><button type="button" className="primary-button" onClick={load}><CalendarDays size={16} /> Connect Google Calendar</button></div>}
+      {state.status === 'loading' && <p className="calendar-note" role="status">Waiting for Google… Finish in the Google window that opened.</p>}
       {state.status === 'error' && <div className="calendar-error"><p className="form-error" role="alert">{state.message}</p><button type="button" className="quiet-button" onClick={load}>Try again</button></div>}
       {state.status === 'ready' && (state.events.length ? <ul className="calendar-events">{state.events.map((event) => {
         const done = imported(event);

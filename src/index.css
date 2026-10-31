@@ -879,3 +879,4 @@ kbd {
   .page-actions { justify-content: flex-start; margin-top: 25px; }
   .page-heading-row .page-actions .primary-button { margin-top: 0; }
 }
+.calendar-connect { display: grid; gap: 12px; justify-items: start; }
