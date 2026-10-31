@@ -104,7 +104,7 @@ export function AiPanel({ feature, plan, aiEnabled, onEnableAi, buildContext, se
 
   if ('ok' in state && state.ok) {
     const { verdict, headline, reason, points } = state.answer;
-    return <div className={`deeper-answer deeper-${verdict}`}><span className="card-kicker"><Sparkles size={12} /> {label.toUpperCase()} — CLAUDE AI</span><h4>{headline}</h4><p>{reason}</p>{points.length > 0 && <ul>{points.slice(0, 5).map((point) => <li key={point}>{point}</li>)}</ul>}<small>Used {costText}{state.credits ? ` · ${plural(state.credits.remaining, 'credit')} left this month` : ''}. Written by Claude from your saved notes — it can be wrong, so trust your own sense of things.</small></div>;
+    return <div className={`deeper-answer deeper-${verdict}`}><span className="card-kicker"><Sparkles size={12} /> {label.toUpperCase()} — AI</span><h4>{headline}</h4><p>{reason}</p>{points.length > 0 && <ul>{points.slice(0, 5).map((point) => <li key={point}>{point}</li>)}</ul>}<small>Used {costText}{state.credits ? ` · ${plural(state.credits.remaining, 'credit')} left this month` : ''}. Written by AI from your saved notes. It can be wrong, so trust your own sense of things.</small></div>;
   }
 
   if (!plan.isPlus) {
@@ -130,5 +130,5 @@ export function AiPanel({ feature, plan, aiEnabled, onEnableAi, buildContext, se
   };
   const loading = 'status' in state && state.status === 'loading';
   const failed = 'ok' in state && !state.ok ? state : null;
-  return <div className="ai-panel deeper-request"><button className="deeper-button" onClick={run} disabled={loading}><Sparkles size={15} /> {loading ? 'Thinking it through…' : `${label} · ${costText}`}</button><span className={failed ? 'deeper-error' : ''} role={failed ? 'alert' : undefined}>{failed ? failed.error : `Sends ${sends} to Claude AI. Uses ${costText} only if it works${credits ? ` · ${plural(credits.remaining, 'credit')} left` : ''}.`}</span></div>;
+  return <div className="ai-panel deeper-request"><button className="deeper-button" onClick={run} disabled={loading}><Sparkles size={15} /> {loading ? 'Thinking it through…' : `${label} · ${costText}`}</button><span className={failed ? 'deeper-error' : ''} role={failed ? 'alert' : undefined}>{failed ? failed.error : `Sends ${sends} to Kinly’s AI. Uses ${costText} only if it works${credits ? ` · ${plural(credits.remaining, 'credit')} left` : ''}.`}</span></div>;
 }

@@ -5,14 +5,21 @@ import { z } from 'zod';
 // 1. The browser sends the person's Supabase session and the saved context for one feature.
 // 2. ai_begin (in the database, run as that person) checks their plan and credits and records a
 //    pending request. Simultaneous requests are counted one at a time, so they can't overspend.
-// 3. Claude (through OpenRouter) writes the answer. Only then does ai_finish mark the request
-//    succeeded; any failure marks it failed, which costs nothing. ai_finish needs a one-time
-//    secret that never leaves this function, so nobody can cancel the charge after getting the answer.
-// The OpenRouter key lives only in this function's environment and never reaches the browser.
+// 3. The model writes the answer. Only then does ai_finish mark the request succeeded; any
+//    failure marks it failed, which costs nothing. ai_finish needs a one-time secret that never
+//    leaves this function, so nobody can cancel the charge after getting the answer.
+//
+// Which model answers depends on the server's settings (never sent to the browser):
+//   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_AI_TOKEN → Llama 3.3 70B on Cloudflare Workers AI. The free
+//     plan has a daily allowance and can't be charged; Cloudflare doesn't train on what's sent.
+//   OPENROUTER_API_KEY (used if Cloudflare isn't set) → Claude Haiku 5.5 through OpenRouter (paid).
 
-const MODEL = 'anthropic/claude-haiku-5.5';
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const CLOUDFLARE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const OPENROUTER_MODEL = 'anthropic/claude-haiku-5.5';
 const MAX_BODY_CHARS = 24_000;
+
+type Provider = 'cloudflare' | 'openrouter';
+const provider = (): Provider | null => (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN ? 'cloudflare' : process.env.OPENROUTER_API_KEY ? 'openrouter' : null);
 
 const Feature = z.enum(['reflection', 'conversation_prep', 'decision_analysis', 'relationship_analysis', 'weekly_review']);
 type Feature = z.infer<typeof Feature>;
@@ -110,8 +117,57 @@ async function rpc<T>(name: string, args: Record<string, unknown>, accessToken: 
 type Begin = { ok: true; usage_id: string; cost: number } | { ok: false; reason: 'plus_required' | 'no_credits'; remaining?: number; resets_at?: string };
 type CreditStatus = { ai_access: boolean; allowance: number; used: number; remaining: number; resets_at: string | null };
 
+type ModelResult = { ok: true; content: unknown } | { ok: false; error: string; status: number };
+
+// Asks the configured model for one structured answer. Failures come back as plain messages.
+async function askModel(which: Provider, system: string, user: string, origin: string): Promise<ModelResult> {
+  const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
+  let response: Response;
+  try {
+    response = which === 'cloudflare'
+      ? await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${CLOUDFLARE_MODEL}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${process.env.CLOUDFLARE_AI_TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ messages, max_tokens: 1200, response_format: { type: 'json_schema', json_schema: ANSWER_SCHEMA } }),
+        signal: AbortSignal.timeout(45_000),
+      })
+      : await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json', 'http-referer': origin, 'x-title': 'Kinly' },
+        body: JSON.stringify({ model: OPENROUTER_MODEL, max_tokens: 2000, messages, response_format: { type: 'json_schema', json_schema: { name: 'kinly_answer', strict: true, schema: ANSWER_SCHEMA } } }),
+        signal: AbortSignal.timeout(45_000),
+      });
+  } catch {
+    return { ok: false, error: 'The AI couldn’t be reached. Try again shortly.', status: 502 };
+  }
+  if (response.status === 401 || response.status === 403) return { ok: false, error: 'AI features are not set up correctly on this site.', status: 503 };
+  // Cloudflare's free daily allowance (or OpenRouter credit) has run out; nothing is ever charged.
+  if (response.status === 402 || (which === 'cloudflare' && response.status === 429)) return { ok: false, error: 'AI answers are resting for today. They’ll be back tomorrow.', status: 503 };
+  if (response.status === 429) return { ok: false, error: 'The AI is busy right now. Try again in a minute.', status: 429 };
+  if (!response.ok) return { ok: false, error: 'The AI couldn’t answer right now. Try again shortly.', status: 502 };
+
+  const data = await response.json().catch(() => null) as { result?: { response?: unknown }; choices?: { finish_reason?: string; message?: { content?: string; refusal?: string | null } }[] } | null;
+  if (which === 'cloudflare') {
+    // Workers AI returns the JSON object itself, or occasionally as a string.
+    const value = data?.result?.response;
+    try {
+      return { ok: true, content: typeof value === 'string' ? JSON.parse(value) : value };
+    } catch {
+      return { ok: false, error: 'The AI’s reply could not be read. Try again.', status: 502 };
+    }
+  }
+  const choice = data?.choices?.[0];
+  if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') return { ok: false, error: 'The AI could not answer this one.', status: 422 };
+  try {
+    return { ok: true, content: JSON.parse(choice?.message?.content ?? '') };
+  } catch {
+    return { ok: false, error: 'The AI’s reply could not be read. Try again.', status: 502 };
+  }
+}
+
 export async function POST(request: Request): Promise<Response> {
-  if (!process.env.OPENROUTER_API_KEY) return json({ error: 'AI features are not set up on this site yet.' }, 503);
+  const which = provider();
+  if (!which) return json({ error: 'AI features are not set up on this site yet.' }, 503);
   if (!process.env.VITE_SUPABASE_URL || !(process.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_ANON_KEY)) return json({ error: 'Accounts are not set up on this site yet.' }, 503);
 
   // Only accept calls from Kinly's own pages.
@@ -148,39 +204,11 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: `${error} No credits were used.` }, status);
   };
 
-  let response: Response;
-  try {
-    response = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json', 'http-referer': origin, 'x-title': 'Kinly' },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 2000,
-        messages: [
-          { role: 'system', content: `${VOICE}\n\n${TASKS[input.feature]}` },
-          { role: 'user', content: `Saved context:\n${JSON.stringify(input.context, null, 2)}` },
-        ],
-        response_format: { type: 'json_schema', json_schema: { name: 'kinly_answer', strict: true, schema: ANSWER_SCHEMA } },
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-  } catch {
-    return fail('Claude could not be reached. Try again shortly.', 502);
-  }
-  if (response.status === 401 || response.status === 403) return fail('AI features are not set up correctly on this site.', 503);
-  if (response.status === 402) return fail('AI features are paused for a moment on Kinly’s side. Try again later.', 503);
-  if (response.status === 429) return fail('Claude is busy right now. Try again in a minute.', 429);
-  if (!response.ok) return fail('Claude could not be reached. Try again shortly.', 502);
-
-  const data = await response.json().catch(() => null) as { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string | null } }[] } | null;
-  const choice = data?.choices?.[0];
-  if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') return fail('Claude could not answer this one.', 422);
-  let answer: z.infer<typeof Answer>;
-  try {
-    answer = Answer.parse(JSON.parse(choice?.message?.content ?? ''));
-  } catch {
-    return fail('Claude’s reply could not be read. Try again.', 502);
-  }
+  const result = await askModel(which, `${VOICE}\n\n${TASKS[input.feature]}`, `Saved context:\n${JSON.stringify(input.context, null, 2)}`, origin);
+  if (!result.ok) return fail(result.error, result.status);
+  const parsed = Answer.safeParse(result.content);
+  if (!parsed.success) return fail('The AI’s reply could not be read. Try again.', 502);
+  const answer = { ...parsed.data, points: parsed.data.points.slice(0, 5) };
   await finish(true);
   const status = await rpc<CreditStatus>('ai_credit_status', {}, accessToken);
   return json({ answer, cost: begin.data.cost, credits: status.ok ? status.data : null });

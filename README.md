@@ -60,9 +60,15 @@ move or sync Kinly data — that stays in the browser.
   - weekly review: 2 credits
 - **Checks:** `supabase/tests/subscription_check.sql` runs all of this as two throwaway accounts
   and rolls everything back.
-- **Setup:** add `OPENROUTER_API_KEY` in Vercel. Answers come from Claude Haiku 5.5
-  (`anthropic/claude-haiku-5.5`) through [OpenRouter](https://openrouter.ai). Give the key a
-  credit limit on OpenRouter, which is the hard ceiling on cost. The function also reads the public
+- **AI provider:** set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AI_TOKEN` in Vercel for Llama 3.3 70B
+  on Cloudflare Workers AI. The free plan has a daily allowance, can't be charged, and Cloudflare
+  doesn't train on what's sent. Later, `OPENROUTER_API_KEY` (Claude Haiku 5.5, paid) is used if
+  Cloudflare isn't set.
+- **"What do I say?" questions** are answered for free in the browser from a scripts library
+  (`src/scripts.ts`) covering situations such as short visits, cancelling, saying no, apologising,
+  reconnecting, boundaries, support, celebrations, asking for help, thanks and hard conversations.
+- **Plus subscriptions:** `api/plus-subscribe`, `api/plus-verify`, `api/plus-cancel` and
+  `api/razorpay-webhook` (see `.env.example` for the server settings they need). The function also reads the public
   `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
 
 ## Payments (Razorpay Standard Checkout)

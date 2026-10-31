@@ -32,6 +32,7 @@ import { Link } from './Link';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
+import { asksForWords, findSituation, generalLines, minutesIn } from './scripts';
 import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
 type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
@@ -55,7 +56,7 @@ type Profile = { name: string; pronouns: string; recharge: Recharge; freeEvening
 type CheckIn = { date: string; energy: Energy; social: Social; freeTonight: boolean | null; mood: string };
 type DayContext = { energy: Energy; social: Social; freeTonight: boolean | null; quietToday: boolean; recharge: Recharge; freeEvenings: number[]; intention: string };
 type DecisionResult = {
-  kind: 'decide' | 'recall' | 'when' | 'cancel' | 'talk' | 'who';
+  kind: 'decide' | 'recall' | 'when' | 'cancel' | 'talk' | 'who' | 'say';
   verdict: Verdict;
   glance: Glance[];
   summary: string;
@@ -203,7 +204,9 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   const { energy } = day;
   // Specific intents first (cancel, talking points, who to contact); then "Should I…" decisions,
   // recall ("how did it go") and timing ("when") questions.
-  const kind: NonNullable<DecisionResult>['kind'] = /\b(cancel|skip|bail|reschedule|call off)\b/.test(q) ? 'cancel'
+  // Asking for words ("what do I say…") comes first; the scripts library answers those.
+  const kind: NonNullable<DecisionResult>['kind'] = asksForWords.test(q) ? 'say'
+    : /\b(cancel|skip|bail|reschedule|call off)\b/.test(q) ? 'cancel'
     : /\b(talk about|bring up|conversation|discuss|say to|topics?)\b/.test(q) ? 'talk'
       : /\bwho\b/.test(q) ? 'who'
         : /\b(should|shall|worth)\b/.test(q) ? 'decide'
@@ -237,6 +240,21 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   const reflectionMemory = (reflection: Reflection): Memory => ({ label: 'Reflection', date: reflectionDate(reflection), text: reflection.text });
   const planMemory = (plan: Plan): Memory => ({ label: plan.title, date: fmtDate(plan.plan_date), text: plan.context || 'No context saved for this plan.' });
   const base = { kind, glance: insight ? glanceFor(insight) : [], summary: '', memories: [] as Memory[], options: [] as DecisionOption[], reasonsToMeet: [] as string[], reasonsToPostpone: [] as string[], reasonsToGatherMore: [] as string[], tradeoffs: [] as string[], followUp: null as string | null, matchedPeople, matchedPlans };
+
+  // --- Say: ready-to-use words for a situation, personalised with what they saved ---
+  if (kind === 'say') {
+    const situation = findSituation(q);
+    const lines = situation ? situation.lines({ name: firstName, minutes: minutesIn(q), when: when === 'right now' ? 'today' : when }) : generalLines(firstName);
+    const memories: Memory[] = lines.map((text) => ({ label: 'You could say', date: '', text }));
+    if (person?.note) memories.push({ label: `From your note about ${firstName}`, date: '', text: person.note });
+    if (insight?.next) memories.push({ label: `Coming up with ${firstName}`, date: relativeDay(insight.next.plan_date), text: insight.next.context ? `${insight.next.title}: ${insight.next.context}` : insight.next.title });
+    (situation?.tips ?? ['Keep it short and kind; you can always say more later.']).forEach((tip) => memories.push({ label: 'A gentle tip', date: '', text: tip }));
+    const feelingNote = insight?.feeling?.tone === 'negative' ? ` Last time with ${firstName} felt draining, so it’s fine to keep this brief.` : insight?.feeling?.tone === 'positive' ? ` Last time with ${firstName} felt good, so a warm, open tone will fit.` : '';
+    const verdict: Verdict = situation
+      ? { tone: 'info', headline: situation.headline, reason: `${situation.intro}${feelingNote}` }
+      : { tone: 'info', headline: 'A simple way to say it', reason: `There’s no ready-made script for this one, so here’s a shape that works for most hard messages.${feelingNote}` };
+    return { ...base, verdict, memories };
+  }
 
   // --- Recall: how did it go, what have I saved? ---
   if (kind === 'recall') {
@@ -725,7 +743,7 @@ function App() {
   const setDeeperAnswers = (on: boolean): string => {
     writeLocalCollection('settings', [{ deeperAnswers: on }]);
     setAiEnabled(on);
-    return on ? 'AI features are on. Nothing is sent until you tap one.' : 'AI features are off. Nothing will be sent to Claude.';
+    return on ? 'AI features are on. Nothing is sent until you tap one.' : 'AI features are off. Nothing will be sent to the AI.';
   };
 
   const saveProfile = (patch: Partial<Profile>) => {
@@ -1082,10 +1100,10 @@ function EmptyInline({ text, action, onClick }: { text: string; action: string; 
 
 function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<DecisionResult>; ai: ReactNode; onClear: () => void }) {
   const { verdict } = decision;
-  const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER' }[decision.kind];
+  const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER', say: 'WHAT TO SAY' }[decision.kind];
   // Recall questions are answered by the saved memories themselves, so show them up front.
-  const memoriesFirst = decision.kind === 'recall' || decision.kind === 'talk';
-  const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">{decision.kind === 'talk' ? 'THINGS TO BRING UP' : 'WHAT YOU SAVED'}</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
+  const memoriesFirst = decision.kind === 'recall' || decision.kind === 'talk' || decision.kind === 'say';
+  const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">{decision.kind === 'talk' ? 'THINGS TO BRING UP' : decision.kind === 'say' ? 'WORDS YOU COULD USE' : 'WHAT YOU SAVED'}</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
   const hasDetails = Boolean(decision.summary || (!memoriesFirst && decision.memories.length) || decision.options.length || decision.reasonsToMeet.length || decision.reasonsToPostpone.length || decision.reasonsToGatherMore.length || decision.tradeoffs.length);
   return <div className={`decision-panel tone-${verdict.tone}`} aria-live="polite">
     <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
@@ -1256,7 +1274,7 @@ function SettingsPage({ plan, aiEnabled, onToggleAi, counts, onExport, onImport,
     <SubscriptionCard plan={plan} />
     <AccountCard />
     <BackupCard onExport={onExport} />
-    <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">KINLY PLUS · CLAUDE AI</span><h2>AI features</h2><p>Kinly Plus includes AI reflections, conversation preparation, decision and relationship analysis, and weekly reviews, written by Anthropic’s Claude AI through OpenRouter. Each one sends only the notes, plans and reflections it needs, and only when you tap it; Kinly doesn’t store them. Each button shows its cost in AI credits before you tap, and failed requests never use credits.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
+    <section className={`content-card settings-ai ${aiEnabled ? 'settings-ai-on' : ''}`}><div className="reflection-icon"><Sparkles size={19} /></div><div className="settings-ai-copy"><span className="card-kicker">KINLY PLUS · AI</span><h2>AI features</h2><p>Kinly Plus includes AI reflections, conversation preparation, decision and relationship analysis, and weekly reviews, written by an AI model running on Cloudflare, which doesn’t use what’s sent to train AI. Each one sends only the notes, plans and reflections it needs, and only when you tap it; Kinly doesn’t store them. Each button shows its cost in AI credits before you tap, and failed requests never use credits.</p><p className="settings-ai-status">{aiEnabled ? 'On — only sent when you ask.' : 'Off — everything stays in this browser.'}</p></div><button className={aiEnabled ? 'quiet-button' : 'primary-button'} onClick={() => setStatus(onToggleAi(!aiEnabled))} aria-pressed={aiEnabled}>{aiEnabled ? 'Turn off' : 'Turn on'}</button></section>
     <div className="settings-grid">
       <section className="content-card settings-card"><span className="card-kicker">BACK UP</span><h2>Export a backup</h2><p>Download everything as a single file. Keep it somewhere safe, or use it to move to another device or browser.</p><div className="settings-actions"><button className="primary-button" onClick={() => setStatus(onExport())}><Download size={16} /> Export backup</button></div></section>
       <section className="content-card settings-card"><span className="card-kicker">RESTORE</span><h2>Import a backup</h2><p>Load a backup file you exported earlier. It replaces what is saved in this browser now.</p><div className="settings-actions"><button className="quiet-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Import backup</button><input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={choseFile} /></div></section>
