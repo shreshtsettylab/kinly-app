@@ -13,7 +13,7 @@ export type Interval = 'month' | 'year';
 
 // Razorpay plan ids are public identifiers, not secrets. Live and test plans differ.
 const PLAN_IDS: Record<'live' | 'test', Record<Interval, string>> = {
-  live: { month: '', year: '' },
+  live: { month: 'plan_TuSKN1VvAWgktx', year: 'plan_TuSLxuzGYUeEQN' },
   test: { month: '', year: '' },
 };
 
