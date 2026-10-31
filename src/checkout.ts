@@ -15,7 +15,7 @@ declare global {
 
 // Razorpay's script loads only when someone starts a payment, not on every page.
 let scriptLoading: Promise<void> | null = null;
-function loadCheckoutScript(): Promise<void> {
+export function loadCheckoutScript(): Promise<void> {
   if (window.Razorpay) return Promise.resolve();
   scriptLoading ??= new Promise((resolve, reject) => {
     const script = document.createElement('script');

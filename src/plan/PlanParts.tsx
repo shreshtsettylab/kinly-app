@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, Sparkles, X } from 'lucide-react';
 import { Link } from '../Link';
-import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, fmtLongDate, runAi, type AiFeature, type AiResult, type NoticeKind, type PlanState } from '../subscription';
+import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, cancelPlus, fmtLongDate, runAi, type AiFeature, type AiResult, type NoticeKind, type PlanState } from '../subscription';
 
 const statusLabels = { active: 'Active', trial: 'Trial', pending: 'Pending', cancelled: 'Cancelled', expired: 'Expired' } as const;
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -54,9 +54,25 @@ export function SubscriptionCard({ plan, showUsage = false }: { plan: PlanState;
       <span className="card-kicker">RECENT AI USE</span>
       {usage.length ? <ul>{usage.map((item) => <li key={item.id}><span>{AI_FEATURES[item.feature]?.label ?? item.feature}</span><span>{item.request_status === 'succeeded' ? plural(item.credits_used, 'credit') : item.request_status === 'failed' ? 'Failed · no credits' : 'In progress'}</span><span>{new Date(item.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span></li>)}</ul> : <p className="sub-muted">No AI features used yet.</p>}
     </div>}
-    <div className="sub-actions"><Link to="/contact" className="quiet-button">Manage subscription</Link></div>
-    <p className="sub-muted sub-footnote">To change or cancel your plan, contact us. Self-serve management will come with online Plus payments.</p>
+    <ManageSubscription plan={plan} />
   </section>;
+}
+
+// Razorpay subscriptions can be cancelled here; Plus stays until the end of the paid period.
+// Plans set up by hand (for testing) are managed by contacting us.
+function ManageSubscription({ plan }: { plan: PlanState }) {
+  const sub = plan.subscription;
+  const [state, setState] = useState<{ busy: boolean; message: string }>({ busy: false, message: '' });
+  if (!sub || sub.provider !== 'razorpay') return <><div className="sub-actions"><Link to="/contact" className="quiet-button">Manage subscription</Link></div><p className="sub-muted sub-footnote">This plan was set up by hand. Contact us to change it.</p></>;
+  if (sub.cancel_at_period_end) return <p className="sub-muted sub-footnote">Cancelled. You won’t be charged again{sub.current_period_end ? `, and Plus stays until ${fmtLongDate(sub.current_period_end)}` : ''}. Everything you’ve saved stays with you on Free.</p>;
+  const cancel = async () => {
+    if (!window.confirm(`Cancel Kinly Plus? You won’t be charged again${sub.current_period_end ? `, and Plus stays until ${fmtLongDate(sub.current_period_end)}` : ''}. Nothing you’ve saved is deleted.`)) return;
+    setState({ busy: true, message: '' });
+    const result = await cancelPlus();
+    if (result.ok) await plan.refresh();
+    setState({ busy: false, message: result.ok ? '' : result.error });
+  };
+  return <><div className="sub-actions"><button className="quiet-button" onClick={cancel} disabled={state.busy}>{state.busy ? 'Cancelling…' : 'Cancel Plus'}</button></div>{state.message ? <p className="sub-muted sub-footnote" role="alert">{state.message}</p> : <p className="sub-muted sub-footnote">Renews automatically through Razorpay. Cancel any time; Plus stays until the end of the period you paid for.</p>}</>;
 }
 
 const limitCopy: Record<NoticeKind, { title: string; text: string }> = {

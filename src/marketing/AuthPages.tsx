@@ -125,6 +125,7 @@ export function Account() {
       <div><dt>Signed in with</dt><dd>{providers || '—'}</dd></div>
       <div><dt>Member since</dt><dd>{new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</dd></div>
     </dl>
+    {new URLSearchParams(window.location.search).get('upgraded') === '1' && plan.isPlus && <div className="lp-auth-notice" role="status"><Check size={16} /><div><b>Welcome to Kinly Plus.</b> Your payment is confirmed and Razorpay will email your receipt.</div></div>}
     <div className="lp-account-plan"><SubscriptionCard plan={plan} showUsage /></div>
     <div className="lp-auth-notice" role="note"><Info size={16} /><div><b>Your Kinly data lives in this browser.</b> Nothing is uploaded automatically. To keep a private copy in your account, use <b>Settings → Back up my data</b> in the app. Automatic syncing across devices will come later.</div></div>
     <div className="lp-auth-done-actions">

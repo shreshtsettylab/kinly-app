@@ -29,6 +29,7 @@ export type Subscription = {
   current_period_start: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  provider: 'razorpay' | 'manual' | null;
 };
 export type CreditStatus = { ai_access: boolean; allowance: number; used: number; remaining: number; resets_at: string | null };
 export type UsageItem = { id: string; feature: AiFeature; credits_used: number; request_status: 'pending' | 'succeeded' | 'failed'; created_at: string };
@@ -54,13 +55,13 @@ export function usePlan({ withUsage = false } = {}): PlanState {
   const refresh = useCallback(async () => {
     if (!supabase || !user) return;
     const [sub, creditStatus, history] = await Promise.all([
-      supabase.from('subscriptions').select('plan, status, billing_interval, current_period_start, current_period_end, cancel_at_period_end').maybeSingle(),
+      supabase.from('subscriptions').select('plan, status, billing_interval, current_period_start, current_period_end, cancel_at_period_end, provider').maybeSingle(),
       supabase.rpc('ai_credit_status'),
       withUsage ? supabase.from('ai_usage').select('id, feature, credits_used, request_status, created_at').order('created_at', { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
     ]);
     if (sub.error || creditStatus.error) { setStatus('unavailable'); return; }
     // Accounts created before plans existed have no row yet; they are on Free.
-    setSubscription((sub.data as Subscription | null) ?? { plan: 'free', status: 'active', billing_interval: null, current_period_start: null, current_period_end: null, cancel_at_period_end: false });
+    setSubscription((sub.data as Subscription | null) ?? { plan: 'free', status: 'active', billing_interval: null, current_period_start: null, current_period_end: null, cancel_at_period_end: false, provider: null });
     setCredits(creditStatus.data as CreditStatus);
     setUsage((history.data as UsageItem[] | null) ?? []);
     setStatus('ready');
@@ -73,7 +74,8 @@ export function usePlan({ withUsage = false } = {}): PlanState {
     void refresh();
   }, [authStatus, refresh]);
 
-  const isPlus = status === 'ready' && subscription?.plan === 'plus' && (subscription.status === 'active' || subscription.status === 'trial');
+  const isPlus = status === 'ready' && subscription?.plan === 'plus' && (subscription.status === 'active' || subscription.status === 'trial')
+    && !!subscription.current_period_end && Date.parse(subscription.current_period_end) > Date.now();
   return { status, subscription, credits, usage, isPlus, refresh, setCredits };
 }
 
@@ -95,4 +97,51 @@ export async function runAi(feature: AiFeature, context: Record<string, unknown>
   } catch {
     return { ok: false, error: 'Kinly couldn’t reach the server. No credits were used.' };
   }
+}
+
+// Calls a Kinly Plus endpoint as the signed-in person.
+async function plusRequest<T>(path: string, body: unknown): Promise<{ ok: true; data: T } | { ok: false; code?: string; error: string }> {
+  const session = supabase ? (await supabase.auth.getSession()).data.session : null;
+  if (!session) return { ok: false, code: 'signed_out', error: 'Sign in first.' };
+  try {
+    const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` }, body: JSON.stringify(body) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return { ok: false, code: data.code, error: data.error || 'Something went wrong. Nothing was charged.' };
+    return { ok: true, data: data as T };
+  } catch {
+    return { ok: false, error: 'Kinly couldn’t reach the server. Nothing was charged.' };
+  }
+}
+
+export type PlusCheckoutOutcome = { status: 'upgraded' } | { status: 'closed' } | { status: 'failed'; code?: string; error: string };
+
+// Opens Razorpay's subscription checkout. The account becomes Plus only after the server has
+// checked Razorpay's signature and its own record of the subscription.
+export async function startPlusCheckout(interval: 'month' | 'year', email?: string | null): Promise<PlusCheckoutOutcome> {
+  const { loadCheckoutScript } = await import('./checkout');
+  const [created] = await Promise.all([plusRequest<{ subscription_id: string; key_id: string }>('/api/plus-subscribe', { interval }), loadCheckoutScript().catch(() => undefined)]);
+  if (!created.ok) return { status: 'failed', code: created.code, error: created.error };
+  const Razorpay = window.Razorpay;
+  if (!Razorpay) return { status: 'failed', error: 'Razorpay checkout couldn’t load. Check your connection and try again.' };
+  return new Promise((resolve) => {
+    const checkout = new Razorpay({
+      key: created.data.key_id,
+      subscription_id: created.data.subscription_id,
+      name: 'Kinly',
+      description: interval === 'year' ? 'Kinly Plus — yearly' : 'Kinly Plus — monthly',
+      prefill: email ? { email } : undefined,
+      theme: { color: '#202833' },
+      handler: async (payment: Record<string, string>) => {
+        const verified = await plusRequest('/api/plus-verify', payment);
+        resolve(verified.ok ? { status: 'upgraded' } : { status: 'failed', error: verified.error });
+      },
+      modal: { ondismiss: () => resolve({ status: 'closed' }) },
+    });
+    checkout.open();
+  });
+}
+
+export async function cancelPlus(): Promise<{ ok: true; endsAt: string | null } | { ok: false; error: string }> {
+  const result = await plusRequest<{ ends_at: string | null }>('/api/plus-cancel', {});
+  return result.ok ? { ok: true, endsAt: result.data.ends_at } : { ok: false, error: result.error };
 }

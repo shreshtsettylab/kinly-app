@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
+import { useAuth } from '../auth/authState';
 import { Link } from '../Link';
-import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, type AiFeature } from '../subscription';
+import { navigateTo } from '../router';
+import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, startPlusCheckout, usePlan, type AiFeature } from '../subscription';
 import { MarketingFooter, MarketingNav } from './parts';
 import { hasSavedData } from './savedData';
 
@@ -38,12 +40,25 @@ const comparison: [string, string, string][] = [
 
 const creditOrder: AiFeature[] = ['reflection', 'conversation_prep', 'decision_analysis', 'relationship_analysis', 'weekly_review'];
 
-// Upgrading isn't available until Razorpay subscriptions are built, so the buttons say so plainly.
-function PlusButton({ id, primary = false }: { id: string; primary?: boolean }) {
-  const [asked, setAsked] = useState(false);
+// Upgrading needs an account, so the plan belongs to someone. The server decides the price and
+// only switches the account to Plus after checking Razorpay's signature.
+function PlusButton({ id, interval, primary = false }: { id: string; interval: 'month' | 'year'; primary?: boolean }) {
+  const auth = useAuth();
+  const plan = usePlan();
+  const [state, setState] = useState<{ busy: boolean; message: string }>({ busy: false, message: '' });
+  const className = `lp-button ${primary ? 'lp-button-primary' : 'lp-button-quiet'} lp-button-block`;
+  if (plan.isPlus) return <><Link to="/account" className={className}>You’re on Kinly Plus</Link><p className="lp-plan-note" id={id}>Manage it from your account.</p></>;
+  if (auth.status !== 'signedIn') return <><Link to="/signin?next=/pricing" className={className}>Sign in to upgrade</Link><p className="lp-plan-note" id={id}>An account keeps your plan with you. Kinly Free works without one.</p></>;
+  const upgrade = async () => {
+    setState({ busy: true, message: '' });
+    const outcome = await startPlusCheckout(interval, auth.user?.email);
+    if (outcome.status === 'upgraded') { navigateTo('/account?upgraded=1'); return; }
+    if (outcome.status === 'closed') { setState({ busy: false, message: '' }); return; }
+    setState({ busy: false, message: outcome.code === 'unavailable' ? 'Coming soon — Plus payments aren’t available yet.' : outcome.code === 'already_plus' ? 'You already have Kinly Plus.' : outcome.error });
+  };
   return <>
-    <button type="button" className={`lp-button ${primary ? 'lp-button-primary' : 'lp-button-quiet'} lp-button-block`} onClick={() => setAsked(true)} aria-describedby={id}>Upgrade to Plus</button>
-    <p className="lp-plan-note" id={id} role={asked ? 'status' : undefined}>{asked ? <b>Coming soon — Plus payments aren’t available yet.</b> : 'Coming soon.'} Nothing is charged, and Kinly Free keeps working as it does today.</p>
+    <button type="button" className={className} onClick={upgrade} disabled={state.busy} aria-describedby={id}>{state.busy ? 'Opening checkout…' : 'Upgrade to Plus'}</button>
+    <p className="lp-plan-note" id={id} role={state.message ? 'status' : undefined}>{state.message ? <b>{state.message}</b> : `Renews every ${interval}. Cancel any time from your account.`}</p>
   </>;
 }
 
@@ -67,12 +82,12 @@ export default function Pricing() {
         <article className="lp-plan lp-plan-paid lp-plan-featured">
           <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Monthly</span></h3><p className="lp-price">{PLUS_PRICES.month}<span className="lp-price-per">/month</span></p><p>Unlimited relationships and AI support.</p></div>
           <ul>{plusFeatures.map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
-          <PlusButton id="plus-monthly-availability" primary />
+          <PlusButton id="plus-monthly-availability" interval="month" primary />
         </article>
         <article className="lp-plan lp-plan-paid">
           <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Annual</span></h3><p className="lp-price">{PLUS_PRICES.year}<span className="lp-price-per">/year</span></p><p>Everything in Plus, for about two months less than paying monthly.</p></div>
           <ul>{['Everything in Plus monthly', `${PLUS_MONTHLY_CREDITS} AI credits every month, all year`, 'One payment a year'].map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
-          <PlusButton id="plus-annual-availability" />
+          <PlusButton id="plus-annual-availability" interval="year" />
         </article>
       </div>
 

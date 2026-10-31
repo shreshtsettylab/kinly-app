@@ -29,8 +29,16 @@ const pages: Record<PolicyPage, { tag: string; title: string; body: ReactNode }>
         <li>Don’t misuse Kinly: no attempts to break, overload or gain unauthorised access to it, and no unlawful use.</li>
         <li>What you write in Kinly is yours. We don’t claim any rights to it.</li>
       </ul>
+      <h2>Kinly Free and Kinly Plus</h2>
+      <p>Kinly Free is free to use, within the limits shown on our <Link to="/pricing">pricing page</Link>. Kinly Plus is a subscription at ₹99 a month or ₹999 a year, which removes those limits and includes a monthly allowance of AI credits. Prices are shown again in the Razorpay window before you pay.</p>
+      <ul>
+        <li>Plus renews automatically at the end of each month or year until you cancel. Razorpay charges the payment method you chose.</li>
+        <li>You can cancel any time from your account. You won’t be charged again, and Plus stays until the end of the period you’ve paid for.</li>
+        <li>Unused AI credits don’t roll over. A plan limit never deletes, hides or locks what you’ve saved: if Plus ends, everything stays and you return to Free.</li>
+        <li>If a renewal payment fails, Razorpay retries it. Plus features pause until it succeeds or you choose Free.</li>
+      </ul>
       <h2>Supporting Kinly early</h2>
-      <p>You can make a one-time payment to support Kinly’s development. The amount is shown in the Razorpay payment window before you pay. Kinly Plus features are proposed, not yet available, and a payment doesn’t guarantee any particular feature or date. Kinly is a digital service: nothing is shipped. Refunds are covered by our <Link to="/refunds">refund policy</Link>.</p>
+      <p>You can also make a one-time payment to support Kinly’s development. It isn’t a subscription and doesn’t include Plus. Kinly is a digital service: nothing is shipped. Refunds are covered by our <Link to="/refunds">refund policy</Link>.</p>
       <p>Payments are processed by Razorpay. We never see or store your card, UPI or bank details.</p>
       <h2>Availability and liability</h2>
       <p>We work to keep Kinly running and your data safe, but Kinly is provided “as is”, without guarantees that it will always be available or error-free. Keep your own backups (Settings → Backup). To the extent the law allows, our total liability to you is limited to the amount you paid us in the 12 months before the claim.</p>
@@ -76,15 +84,17 @@ const pages: Record<PolicyPage, { tag: string; title: string; body: ReactNode }>
     tag: 'Refunds',
     title: 'Refund and cancellation policy',
     body: <>
-      <p>Kinly is free to use. The only payment is the optional one-time “Support Kinly early” contribution.</p>
+      <p>Kinly Free costs nothing. Payments are for Kinly Plus (₹99 a month or ₹999 a year) or the optional one-time “Support Kinly early” contribution.</p>
       <h2>Refunds within 7 days</h2>
       <p>If you change your mind, email <Mail /> within 7 days of paying, with your Razorpay payment reference (it starts with “pay_” and is in Razorpay’s email receipt). We’ll refund the full amount, no questions asked.</p>
       <h2>How refunds are paid</h2>
       <p>Refunds go back to the original payment method through Razorpay. Once we start a refund, it usually reaches your account within 5–7 business days, depending on your bank.</p>
+      <h2>Kinly Plus subscriptions</h2>
+      <p>If you’re not happy with Plus, email <Mail /> within 7 days of your first payment and we’ll refund it in full. Later renewals aren’t refunded, but you can cancel any time so that you aren’t charged again; Plus stays until the end of the period you’ve paid for.</p>
       <h2>Duplicate or failed payments</h2>
       <p>If you were charged twice, or money left your account but the payment didn’t complete, email us at any time and we’ll refund it in full.</p>
       <h2>Cancellation</h2>
-      <p>The contribution is a one-time payment, not a subscription, so there’s nothing to cancel and you won’t be charged again.</p>
+      <p>Cancel Kinly Plus any time from your account page; no email needed. The one-time “Support Kinly early” contribution isn’t a subscription, so there’s nothing to cancel.</p>
       <h2>Shipping</h2>
       <p>Kinly is a digital service. Nothing is shipped.</p>
     </>,
