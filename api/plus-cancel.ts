@@ -1,4 +1,4 @@
-import { admin, adminReady, json, razorpay, razorpayKeys, sameOrigin, signedInUser, type SubscriptionRow } from './_plus';
+import { admin, adminReady, json, razorpay, razorpayKeys, sameOrigin, signedInUser, type SubscriptionRow } from './_plus.js';
 
 // Cancels Kinly Plus at the end of the current billing period. Plus keeps working until then;
 // Razorpay's webhook moves the account back to Free when the period ends.

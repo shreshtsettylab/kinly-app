@@ -1,4 +1,4 @@
-import { admin, adminReady, applyRazorpayState, json, signatureMatches, type RazorpaySubscription, type SubscriptionRow } from './_plus';
+import { admin, adminReady, applyRazorpayState, json, signatureMatches, type RazorpaySubscription, type SubscriptionRow } from './_plus.js';
 
 // Razorpay tells Kinly about renewals, failed payments and cancellations here. Every delivery
 // is checked against RAZORPAY_WEBHOOK_SECRET (HMAC-SHA256 of the raw body) and applied once,

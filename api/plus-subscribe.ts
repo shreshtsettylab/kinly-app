@@ -1,4 +1,4 @@
-import { admin, adminReady, json, planId, razorpay, razorpayKeys, sameOrigin, signedInUser, type Interval, type SubscriptionRow } from './_plus';
+import { admin, adminReady, json, planId, razorpay, razorpayKeys, sameOrigin, signedInUser, type Interval, type SubscriptionRow } from './_plus.js';
 
 // Kinly Plus, step 1: create a Razorpay subscription for the signed-in account. The plan and
 // price come from Razorpay plans chosen here on the server, never from the browser.

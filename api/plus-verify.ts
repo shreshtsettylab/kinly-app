@@ -1,4 +1,4 @@
-import { admin, adminReady, applyRazorpayState, json, razorpay, razorpayKeys, sameOrigin, signatureMatches, signedInUser, type RazorpaySubscription, type SubscriptionRow } from './_plus';
+import { admin, adminReady, applyRazorpayState, json, razorpay, razorpayKeys, sameOrigin, signatureMatches, signedInUser, type RazorpaySubscription, type SubscriptionRow } from './_plus.js';
 
 // Kinly Plus, step 2: after checkout, confirm the payment really came from Razorpay
 // (HMAC-SHA256 of payment_id|subscription_id with the key secret), that the subscription
