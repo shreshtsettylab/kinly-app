@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, Sparkles, X } from 'lucide-react';
 import { Link } from '../Link';
-import { AI_FEATURES, FREE_LIMITS, PLUS_MONTHLY_CREDITS, PLUS_PRICES, fmtLongDate, runAi, type AiFeature, type AiResult, type LimitKind, type PlanState } from '../subscription';
+import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, fmtLongDate, runAi, type AiFeature, type AiResult, type NoticeKind, type PlanState } from '../subscription';
 
 const statusLabels = { active: 'Active', trial: 'Trial', pending: 'Pending', cancelled: 'Cancelled', expired: 'Expired' } as const;
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -21,9 +21,10 @@ export function SubscriptionCard({ plan, showUsage = false }: { plan: PlanState;
       </dl>
       <ul className="sub-limits">
         <li><b>{FREE_LIMITS.people}</b> people allowed</li>
+        <li><b>{FREE_QUESTIONS_PER_MONTH}</b> questions a month</li>
         <li><b>{FREE_LIMITS.plans}</b> active plans allowed</li>
         <li><b>{FREE_LIMITS.goals}</b> active goals allowed</li>
-        <li>Unlimited reflections, notes and decision support</li>
+        <li>Unlimited reflections and notes</li>
       </ul>
       <div className="sub-actions">
         <Link to="/pricing" className="primary-button">Explore Kinly Plus <ArrowUpRight size={15} /></Link>
@@ -58,18 +59,19 @@ export function SubscriptionCard({ plan, showUsage = false }: { plan: PlanState;
   </section>;
 }
 
-const limitCopy: Record<LimitKind, { title: string; text: string }> = {
+const limitCopy: Record<NoticeKind, { title: string; text: string }> = {
+  questions: { title: `You’ve asked ${FREE_QUESTIONS_PER_MONTH} questions this month`, text: 'That’s the Kinly Free allowance. Everything you’ve saved stays open, and reflections are unlimited. Kinly Plus has unlimited questions.' },
   people: { title: `Your circle has ${FREE_LIMITS.people} people`, text: `That’s the most Kinly Free keeps active. Archive someone you see less often to make room — their history stays — or move to Kinly Plus for unlimited people.` },
   plans: { title: `You have ${FREE_LIMITS.plans} upcoming plans`, text: 'That’s the Free limit for active plans. Past plans don’t count, so this frees up as plans happen. Kinly Plus has no limit.' },
   goals: { title: `You have ${FREE_LIMITS.goals} active goals`, text: 'That’s the Free limit. Mark one completed to make room, or move to Kinly Plus for unlimited goals.' },
 };
 
 // Shown only when someone tries to go past a Free limit. Dismissible, and nothing is hidden or removed.
-export function UpgradeNotice({ kind, onDismiss }: { kind: LimitKind; onDismiss: () => void }) {
+export function UpgradeNotice({ kind, onDismiss, resetsOn }: { kind: NoticeKind; onDismiss: () => void; resetsOn?: string }) {
   const { title, text } = limitCopy[kind];
   return <div className="upgrade-notice" role="status">
     <Sparkles size={17} className="upgrade-notice-icon" />
-    <div><strong>{title}</strong><p>{text}</p><Link to="/pricing" className="card-link">Explore Kinly Plus <ArrowUpRight size={14} /></Link></div>
+    <div><strong>{title}</strong><p>{resetsOn && `Your questions reset on ${resetsOn}. `}{text}</p><Link to="/pricing" className="card-link">Explore Kinly Plus <ArrowUpRight size={14} /></Link></div>
     <button className="icon-button" onClick={onDismiss} aria-label="Dismiss"><X size={16} /></button>
   </div>;
 }

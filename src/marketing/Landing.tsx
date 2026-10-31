@@ -149,12 +149,12 @@ export default function Landing() {
         <div className="lp-pricing">
           <Reveal><article className="lp-plan lp-plan-free">
             <div className="lp-plan-head"><h3>Free</h3><p className="lp-price">₹0</p><p>For keeping your circle close, every day.</p></div>
-            <ul>{['Up to 10 people, 5 active plans and 3 active goals', 'Unlimited decision support with clear verdicts', 'Unlimited reflections, notes and your daily check-in', 'Backup, restore and delete — all in your browser'].map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
+            <ul>{['Up to 5 people in your circle', '15 questions a month, with clear verdicts', 'Unlimited reflections, notes and your daily check-in', 'Backup, restore and delete — all in your browser'].map((item) => <li key={item}><Check size={15} />{item}</li>)}</ul>
             <Link to="/app" className="lp-button lp-button-primary lp-button-block">{returning ? 'Open Kinly' : 'Get started'}</Link>
           </article></Reveal>
           <Reveal delay={90}><article className="lp-plan lp-plan-plus">
-            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Coming soon</span></h3><p className="lp-price">₹99<span className="lp-price-per">/month</span></p><p>Or ₹999 a year. Unlimited people, plans and goals, plus 20 AI credits a month.</p></div>
-            <ul>{['AI reflections and weekly relationship reviews', 'Advanced decision and relationship analysis', 'AI conversation preparation', 'Unlimited people, plans and goals'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
+            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Coming soon</span></h3><p className="lp-price">₹99<span className="lp-price-per">/month</span></p><p>Or ₹999 a year. Unlimited people and questions, plus 20 AI credits a month.</p></div>
+            <ul>{['AI reflections and weekly relationship reviews', 'Advanced decision and relationship analysis', 'AI conversation preparation', 'Unlimited people, questions, plans and goals'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
             <Link to="/pricing" className="lp-button lp-button-quiet lp-button-block">Compare plans</Link>
             {checkoutAvailable && <div className="lp-support-early"><p>Plus payments aren’t open yet. Want to help build it now?</p><SupportButton /></div>}
           </article></Reveal>

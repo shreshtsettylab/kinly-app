@@ -5,8 +5,11 @@ import { supabase } from './auth/supabaseClient';
 // Kinly's two plans. What someone is entitled to always comes from the database (subscriptions
 // and the ai_credit_status function); nothing here, in React state or in localStorage decides it.
 
-export const FREE_LIMITS = { people: 10, plans: 5, goals: 3 } as const;
+export const FREE_LIMITS = { people: 5, plans: 5, goals: 3 } as const;
 export type LimitKind = keyof typeof FREE_LIMITS;
+// Questions answered from saved notes (the instant answers). Counted per calendar month.
+export const FREE_QUESTIONS_PER_MONTH = 15;
+export type NoticeKind = LimitKind | 'questions';
 export const PLUS_PRICES = { month: '₹99', year: '₹999' } as const;
 export const PLUS_MONTHLY_CREDITS = 20;
 

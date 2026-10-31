@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
 import { Link } from '../Link';
-import { AI_FEATURES, FREE_LIMITS, PLUS_MONTHLY_CREDITS, PLUS_PRICES, type AiFeature } from '../subscription';
+import { AI_FEATURES, FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, PLUS_MONTHLY_CREDITS, PLUS_PRICES, type AiFeature } from '../subscription';
 import { MarketingFooter, MarketingNav } from './parts';
 import { hasSavedData } from './savedData';
 
 const freeFeatures = [
   `Up to ${FREE_LIMITS.people} people in your circle`,
-  `Up to ${FREE_LIMITS.plans} active plans and ${FREE_LIMITS.goals} active goals`,
+  `${FREE_QUESTIONS_PER_MONTH} questions a month, answered from your own notes`,
   'Unlimited reflections and notes',
-  'Unlimited decision support with clear verdicts',
+  `Up to ${FREE_LIMITS.plans} active plans and ${FREE_LIMITS.goals} active goals`,
   'Relationship history and basic reminders',
   'Export your data any time',
 ];
 
 const plusFeatures = [
-  'Unlimited people, plans and goals',
+  'Unlimited people, questions, plans and goals',
   `${PLUS_MONTHLY_CREDITS} AI credits every month`,
   'AI reflections',
   'Advanced decision analysis',
@@ -27,10 +27,11 @@ const plusFeatures = [
 
 const comparison: [string, string, string][] = [
   ['People in your circle', `Up to ${FREE_LIMITS.people} active`, 'Unlimited'],
+  ['Questions', `${FREE_QUESTIONS_PER_MONTH} a month`, 'Unlimited'],
   ['Active plans', `Up to ${FREE_LIMITS.plans}`, 'Unlimited'],
   ['Active goals', `Up to ${FREE_LIMITS.goals}`, 'Unlimited'],
   ['Reflections and notes', 'Unlimited', 'Unlimited'],
-  ['Decision support', 'Unlimited, from your saved notes', 'Plus advanced AI analysis'],
+  ['Decision support', 'Clear verdicts from your saved notes', 'Plus advanced AI analysis'],
   ['AI features', 'Not included', `${PLUS_MONTHLY_CREDITS} credits a month`],
   ['Data export', 'Included', 'Included'],
 ];

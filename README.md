@@ -36,7 +36,9 @@ move or sync Kinly data — that stays in the browser.
 
 | | Free (₹0) | Plus (₹99/month or ₹999/year) |
 |---|---|---|
-| Active people | 10 (archived people don't count) | Unlimited |
+| Active people | 5 (archived people don't count) | Unlimited |
+| Questions (instant answers) | 15 per calendar month, counted in the browser | Unlimited |
+| Reflections and notes | Unlimited | Unlimited |
 | Active plans | 5 upcoming (past plans don't count) | Unlimited |
 | Active goals | 3 (completed goals don't count) | Unlimited |
 | AI features | — | 20 credits per billing month |

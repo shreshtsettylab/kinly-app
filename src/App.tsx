@@ -32,7 +32,7 @@ import { Link } from './Link';
 import { createLocalId, readLocalCollection, removeLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
-import { FREE_LIMITS, usePlan, type LimitKind } from './subscription';
+import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
 type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
 // Archived people stay saved, with their history, but don't count towards the Free limit.
@@ -543,7 +543,9 @@ function App() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const plan = usePlan();
   // Shown when someone tries to go past a Free limit; dismissible and never repeated on its own.
-  const [limitNotice, setLimitNotice] = useState<LimitKind | null>(null);
+  const [limitNotice, setLimitNotice] = useState<NoticeKind | null>(null);
+  // Questions asked this calendar month, kept in this browser.
+  const [questionUsage, setQuestionUsage] = useState<{ month: string; questions: number }>({ month: '', questions: 0 });
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -570,6 +572,7 @@ function App() {
     setProfile({ ...defaultProfile, ...readLocalCollection<Partial<Profile>>('profile', [defaultProfile])[0] });
     setCheckins(readLocalCollection<CheckIn>('checkins', []));
     setAiEnabled(readLocalCollection<{ deeperAnswers: boolean }>('settings', [{ deeperAnswers: false }])[0]?.deeperAnswers === true);
+    setQuestionUsage(readLocalCollection<{ month: string; questions: number }>('usage', [{ month: '', questions: 0 }])[0] ?? { month: '', questions: 0 });
     setLoading(false);
   };
 
@@ -787,7 +790,21 @@ function App() {
     return 'The example people and plans are back.';
   };
 
-  const submitQuestion = (override?: string) => { setSubmittedQuestion(override ?? question); };
+  // Free includes a monthly allowance of questions; asking the same question again doesn't count.
+  const monthKey = localDateKey().slice(0, 7);
+  const questionsUsed = questionUsage.month === monthKey ? questionUsage.questions : 0;
+  const questionsLeft = plan.isPlus ? null : Math.max(0, FREE_QUESTIONS_PER_MONTH - questionsUsed);
+  const nextMonth = new Date(); nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
+  const questionsResetOn = fmtLongDate(`${localDateKey(nextMonth)}T12:00:00`);
+  const countQuestion = (text: string): boolean => {
+    if (!text.trim() || text === submittedQuestion || plan.isPlus) return true;
+    if (questionsUsed >= FREE_QUESTIONS_PER_MONTH) { setLimitNotice('questions'); return false; }
+    const next = { month: monthKey, questions: questionsUsed + 1 };
+    writeLocalCollection('usage', [next]);
+    setQuestionUsage(next);
+    return true;
+  };
+  const submitQuestion = (override?: string) => { const text = override ?? question; if (countQuestion(text)) setSubmittedQuestion(text); };
   const decisionResult = useMemo(() => buildDecision(submittedQuestion, people, plans, goals, reflections, day), [submittedQuestion, people, plans, goals, reflections, day]);
 
   // What each AI feature sends: only the saved context it needs, cut to size, and only when tapped.
@@ -843,7 +860,7 @@ function App() {
   const openPerson = (id: string) => { setPersonId(id); navigate('person'); };
   const askAbout = (text: string) => {
     setQuestion(text);
-    setSubmittedQuestion(text);
+    if (countQuestion(text)) setSubmittedQuestion(text);
     setPage('home');
     setMobileOpen(false);
     requestAnimationFrame(() => questionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
@@ -867,9 +884,9 @@ function App() {
       <main className="main-content">
         <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="breadcrumb-link" onClick={() => navigate('home')}>Kinly</button><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong aria-current="page">{selectedPerson?.name}</strong></> : <strong aria-current="page">{page === 'you' ? 'You' : navigation.find((item) => item.id === page)?.label}</strong>}</nav><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><button className="top-avatar" onClick={() => navigate('you')} aria-label="Your day and profile" title="Your day and profile">{initialsOf(profileName) || '·'}</button></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
-        {limitNotice && <UpgradeNotice kind={limitNotice} onDismiss={() => setLimitNotice(null)} />}
+        {limitNotice && !(limitNotice === 'questions' && page === 'home') && <UpgradeNotice kind={limitNotice} resetsOn={limitNotice === 'questions' ? questionsResetOn : undefined} onDismiss={() => setLimitNotice(null)} />}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} questionNote={limitNotice === 'questions' ? <UpgradeNotice kind="questions" resetsOn={questionsResetOn} onDismiss={() => setLimitNotice(null)} /> : questionsLeft !== null ? <p className="questions-left">{questionsLeft} of {FREE_QUESTIONS_PER_MONTH} free questions left this month · resets {questionsResetOn}</p> : null} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} onArchive={(archived) => archivePerson(selectedPerson.id, archived)} ai={<div className="person-ai"><AiPanel key={`prep-${selectedPerson.id}`} feature="conversation_prep" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Conversation preparation suggests an opener and what to follow up on, from your own notes." /><AiPanel key={`analysis-${selectedPerson.id}`} feature="relationship_analysis" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Detailed relationship analysis looks at the rhythm of your time together and how it has felt." /></div>} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
@@ -962,7 +979,7 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ question, setQuestion, onSubmitQuestion, decision, ai, weekly, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
@@ -976,7 +993,7 @@ function HomePage({ question, setQuestion, onSubmitQuestion, decision, ai, weekl
   const ask = (prompt: string) => { setQuestion(prompt); onSubmitQuestion(prompt); };
   const askSection = <section className="ask-section">
     <div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div>
-    <form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="e.g. Should I meet Maya tonight?" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd><button type="submit" className="ask-button" disabled={!question.trim()}>Ask</button></form>
+    <form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="e.g. Should I meet Maya tonight?" aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd><button type="submit" className="ask-button" disabled={!question.trim()}>Ask</button></form>{questionNote}
     {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
     <div className="energy-row" role="group" aria-label="Your energy right now"><span className="ask-label">Your energy right now</span>{energyLevels.map((level) => <button type="button" key={level.value} className={`energy-option ${energy === level.value ? 'energy-active' : ''}`} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div>
     <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>

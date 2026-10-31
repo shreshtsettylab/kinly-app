@@ -828,3 +828,6 @@ kbd {
   .sub-history li { grid-template-columns: 1fr auto; }
   .sub-history li span:last-child { display: none; }
 }
+
+.questions-left { margin: 10px 2px 0; color: var(--text-muted); font-size: 11.5px; }
+.ask-section .upgrade-notice { margin: 14px 0 0; }
