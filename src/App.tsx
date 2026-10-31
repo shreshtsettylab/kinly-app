@@ -34,15 +34,17 @@ import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
 import { asksForWords, findSituation, generalLines, minutesIn } from './scripts';
+import { calendarAvailable, upcomingEvents, type CalendarEvent } from './calendar';
 import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
 type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | 'settings' | 'you';
 // Archived people stay saved, with their history, but don't count towards the Free limit.
 type Person = Omit<SeedPerson, 'id'> & { id: string; archived?: boolean };
-type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string };
+// calendar_event_id marks a plan imported from Google Calendar, so it isn't imported twice.
+type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string; calendar_event_id?: string };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
 type Reflection = { id: string; text: string; created_at: string; person_id?: string | null };
-type Modal = 'person' | 'plan' | 'goal' | null;
+type Modal = 'person' | 'plan' | 'goal' | 'calendar' | null;
 type DecisionOption = { label: string; detail: string; evidence: string };
 type Memory = { label: string; date: string; text: string };
 type Glance = { label: string; value: string };
@@ -533,15 +535,21 @@ function exampleData(): { people: Person[]; plans: Plan[]; reflections: Reflecti
   };
 }
 
-// True when the saved people, plans and reflections are exactly the old preloaded examples.
-function isUntouchedExamples(people: Person[], plans: Plan[], reflections: Reflection[]): boolean {
-  if (!people.length) return false;
+// Earlier versions preloaded example people, plans and a reflection for everyone. This removes each
+// one that is still exactly as it was. Anything edited, and anything the person added, stays, and
+// a sample person is kept if one of their own plans or reflections is linked to them.
+function withoutUntouchedExamples(people: Person[], plans: Plan[], reflections: Reflection[]) {
   const examples = exampleData();
-  const same = <T extends { id: string }>(saved: T[], originals: T[], fields: (keyof T)[]) =>
-    saved.every((item) => { const original = originals.find((candidate) => candidate.id === item.id); return !!original && fields.every((field) => item[field] === original[field]); });
-  return same(people, examples.people, ['name', 'relationship', 'detail', 'note'])
-    && same(plans, examples.plans, ['title', 'context', 'category'])
-    && same(reflections, examples.reflections, ['text']);
+  const untouched = <T extends { id: string }>(item: T, originals: T[], fields: (keyof T)[]) => {
+    const original = originals.find((candidate) => candidate.id === item.id);
+    return !!original && fields.every((field) => item[field] === original[field]);
+  };
+  const keptPlans = plans.filter((plan) => !untouched(plan, examples.plans, ['title', 'context', 'category']));
+  const keptReflections = reflections.filter((reflection) => !untouched(reflection, examples.reflections, ['text']));
+  const inUse = new Set([...keptPlans.map((plan) => plan.person_id), ...keptReflections.map((reflection) => reflection.person_id)]);
+  const keptPeople = people.filter((person) => inUse.has(person.id) || !untouched(person, examples.people, ['name', 'relationship', 'detail', 'note']));
+  const changed = keptPeople.length !== people.length || keptPlans.length !== plans.length || keptReflections.length !== reflections.length;
+  return { people: keptPeople, plans: keptPlans, reflections: keptReflections, changed };
 }
 
 const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -606,12 +614,12 @@ function App() {
     let loadedPlans = readLocalCollection<Plan>('plans', []);
     let loadedReflections = readLocalCollection<Reflection>('reflections', []);
     let loadedProfile = { ...defaultProfile, ...readLocalCollection<Partial<Profile>>('profile', [defaultProfile])[0] };
-    // Earlier versions preloaded example people for everyone. If they're still exactly as they
-    // were, clear them so the space starts empty. Anything someone edited is theirs and stays.
+    // Clear leftover preloaded examples, unless the person chose to explore with them.
     const choseExamples = readLocalCollection<{ examples: boolean }>('flags', [{ examples: false }])[0]?.examples === true;
-    if (!choseExamples && isUntouchedExamples(loadedPeople, loadedPlans, loadedReflections)) {
-      loadedPeople = []; loadedPlans = []; loadedReflections = [];
-      writeLocalCollection('people', []); writeLocalCollection('plans', []); writeLocalCollection('reflections', []);
+    const cleaned = choseExamples ? null : withoutUntouchedExamples(loadedPeople, loadedPlans, loadedReflections);
+    if (cleaned?.changed) {
+      ({ people: loadedPeople, plans: loadedPlans, reflections: loadedReflections } = cleaned);
+      writeLocalCollection('people', loadedPeople); writeLocalCollection('plans', loadedPlans); writeLocalCollection('reflections', loadedReflections);
     }
     if (loadedProfile.name === 'Jordan Lee' && !loadedProfile.intention && !loadedProfile.pronouns) {
       loadedProfile = { ...loadedProfile, name: '' };
@@ -722,6 +730,18 @@ function App() {
     if (limits && becomesActive && nextPlans.filter(isUpcoming).length > limits.plans) { setError(planLimitMessage); return; }
     writeLocalCollection('plans', nextPlans);
     setModal(null); setEditingId(null); loadData();
+  };
+
+  // Adds the chosen Google Calendar events as plans. Free keeps its limit on upcoming plans.
+  const importCalendarPlans = (chosen: { event: CalendarEvent; personId: string | null }[]) => {
+    const fresh = chosen.filter(({ event }) => !plans.some((plan) => plan.calendar_event_id === event.id));
+    const added: Plan[] = fresh.map(({ event, personId }) => ({
+      id: createLocalId(), title: event.title, plan_date: event.date, plan_time: event.time, person_id: personId,
+      category: personId ? 'Social' : 'Personal', context: event.location ? `At ${event.location}` : '', calendar_event_id: event.id,
+    }));
+    writeLocalCollection('plans', [...plans, ...added]);
+    setModal(null);
+    loadData();
   };
 
   const deletePlan = async (id: string) => {
@@ -950,7 +970,7 @@ function App() {
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} onArchive={(archived) => archivePerson(selectedPerson.id, archived)} ai={<div className="person-ai"><AiPanel key={`prep-${selectedPerson.id}`} feature="conversation_prep" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Conversation preparation suggests an opener and what to follow up on, from your own notes." /><AiPanel key={`analysis-${selectedPerson.id}`} feature="relationship_analysis" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Detailed relationship analysis looks at the rhythm of your time together and how it has felt." /></div>} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
-          {page === 'plans' && <PlansPage plans={plans} people={people} limit={limits?.plans ?? null} onAdd={() => openModal('plan')} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
+          {page === 'plans' && <PlansPage plans={plans} people={people} limit={limits?.plans ?? null} onAdd={() => openModal('plan')} onImport={calendarAvailable ? () => setModal('calendar') : undefined} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} limit={limits?.goals ?? null} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
           {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} ai={reflections.length > 0 ? <AiPanel feature="reflection" {...aiProps} buildContext={reflectionContext} sends="your 10 most recent reflections" benefit="An AI reflection notices themes across what you’ve written and offers a question to sit with." /> : null} />}
           {page === 'you' && <YouPage profile={profile} onSaveProfile={saveProfile} todayCheckIn={todayCheckIn} onCheckIn={updateCheckIn} checkins={checkins} people={people} plans={plans} reflections={reflections} />}
@@ -959,6 +979,7 @@ function App() {
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
       {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} presetPersonId={presetPersonId} people={activePeople} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={savePlan} />}
+      {modal === 'calendar' && <CalendarImportModal people={activePeople} plans={plans} roomLeft={limits ? Math.max(0, limits.plans - upcomingPlans.length) : null} onImport={importCalendarPlans} onClose={() => setModal(null)} />}
       {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
   );
@@ -1135,8 +1156,8 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
   </div>;
 }
 
-function PlansPage({ plans, people, limit, onAdd, onEdit, onDelete }: { plans: Plan[]; people: Person[]; limit: number | null; onAdd: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); if (!plans.length) return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section><p className="sample-intro">Nothing planned yet. A plan in Kinly looks like this:</p><button type="button" className="plan-card sample-card sample-plan" onClick={onAdd}><div className="plan-card-date"><strong>Sat</strong><b>7</b><small>Nov</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">Social</span><h3>Coffee with Alex</h3></div><SampleTag /></div><p>Keep it unhurried. Ask about the new job.</p><div className="plan-card-meta"><span><Clock3 size={14} /> 10:00 AM</span><span><Users size={14} /> Alex Morgan</span></div></div></button></div>;
-  return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></section>{limit && <div className="goal-limit"><CalendarDays size={16} /><span>{upcoming.length} of {limit} upcoming plans on Free · past plans don’t count</span><div className="goal-progress"><i style={{ width: `${Math.min(upcoming.length / limit * 100, 100)}%` }} /></div></div>}<div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
+function PlansPage({ plans, people, limit, onAdd, onImport, onEdit, onDelete }: { plans: Plan[]; people: Person[]; limit: number | null; onAdd: () => void; onImport?: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const actions = <div className="page-actions">{onImport && <button className="quiet-button" onClick={onImport}><CalendarDays size={16} /> Import from Google Calendar</button>}<button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></div>; const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); if (!plans.length) return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section><p className="sample-intro">Nothing planned yet. A plan in Kinly looks like this:</p><button type="button" className="plan-card sample-card sample-plan" onClick={onAdd}><div className="plan-card-date"><strong>Sat</strong><b>7</b><small>Nov</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">Social</span><h3>Coffee with Alex</h3></div><SampleTag /></div><p>Keep it unhurried. Ask about the new job.</p><div className="plan-card-meta"><span><Clock3 size={14} /> 10:00 AM</span><span><Users size={14} /> Alex Morgan</span></div></div></button></div>;
+  return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section>{limit && <div className="goal-limit"><CalendarDays size={16} /><span>{upcoming.length} of {limit} upcoming plans on Free · past plans don’t count</span><div className="goal-progress"><i style={{ width: `${Math.min(upcoming.length / limit * 100, 100)}%` }} /></div></div>}<div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
 
 function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {fmtTime(plan.plan_time)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
 
@@ -1195,6 +1216,48 @@ function ReflectionsPage({ reflections, people, onSave, onDelete, ai }: { reflec
 
 function ColorField({ value }: { value: string }) {
   return <fieldset className="color-field"><legend>Colour</legend><div className="color-swatches">{personColors.map((color) => <label key={color} className="color-swatch" style={{ backgroundColor: color }}><input type="radio" name="color" value={color} defaultChecked={color === value} aria-label={`Colour ${color}`} /><Check size={13} /></label>)}</div></fieldset>;
+}
+
+// Lists the next 30 days of Google Calendar events; the person ticks which become plans.
+function CalendarImportModal({ people, plans, roomLeft, onImport, onClose }: { people: Person[]; plans: Plan[]; roomLeft: number | null; onImport: (chosen: { event: CalendarEvent; personId: string | null }[]) => void; onClose: () => void }) {
+  const [state, setState] = useState<{ status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; events: CalendarEvent[] }>({ status: 'loading' });
+  const [picked, setPicked] = useState<Record<string, string | null>>({});
+  const load = () => {
+    setState({ status: 'loading' });
+    upcomingEvents().then((events) => setState({ status: 'ready', events }), (failure: unknown) => setState({ status: 'error', message: failure instanceof Error ? failure.message : 'Google Calendar couldn’t be read.' }));
+  };
+  useEffect(load, []);
+  // Suggests the person whose first name appears in the event title or its guest list.
+  const suggest = (event: CalendarEvent) => people.find((person) => {
+    const first = person.name.split(' ')[0].toLowerCase();
+    return first.length > 1 && (wordsOf(event.title).includes(first) || event.attendees.some((guest) => guest.toLowerCase().includes(first)));
+  })?.id ?? null;
+  const imported = (event: CalendarEvent) => plans.some((plan) => plan.calendar_event_id === event.id);
+  const chosen = Object.keys(picked);
+  const overLimit = roomLeft !== null && chosen.length > roomLeft;
+  const toggle = (event: CalendarEvent) => setPicked((current) => { const next = { ...current }; if (event.id in next) delete next[event.id]; else next[event.id] = suggest(event); return next; });
+  const submit = (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    if (state.status !== 'ready' || !chosen.length || overLimit) return;
+    onImport(state.events.filter((event) => event.id in picked).map((event) => ({ event, personId: picked[event.id] })));
+  };
+  return <ModalFrame title="Import from Google Calendar" eyebrow="YOUR TIME" onClose={onClose}>
+    <form onSubmit={submit} className="calendar-import">
+      <p className="calendar-note">Your next 30 days of events, read straight from Google into this browser. Choose the ones worth planning around; nothing is sent to Kinly.</p>
+      {state.status === 'loading' && <p className="calendar-note" role="status">Waiting for Google… A Google window may open to ask for read-only access.</p>}
+      {state.status === 'error' && <div className="calendar-error"><p className="form-error" role="alert">{state.message}</p><button type="button" className="quiet-button" onClick={load}>Try again</button></div>}
+      {state.status === 'ready' && (state.events.length ? <ul className="calendar-events">{state.events.map((event) => {
+        const done = imported(event);
+        const on = event.id in picked;
+        return <li key={event.id} className={done ? 'calendar-event-done' : ''}>
+          <label className="calendar-event"><input type="checkbox" checked={on || done} disabled={done} onChange={() => toggle(event)} /><span><strong>{event.title}</strong><small>{fmtDate(event.date)} · {event.allDay ? 'All day' : fmtTime(event.time)}{done ? ' · already a plan' : ''}</small></span></label>
+          {on && people.length > 0 && <select aria-label={`Who is ${event.title} with?`} value={picked[event.id] ?? ''} onChange={(change) => setPicked({ ...picked, [event.id]: change.target.value || null })}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>}
+        </li>;
+      })}</ul> : <p className="calendar-note">No events in the next 30 days.</p>)}
+      {overLimit && <p className="form-error" role="alert">Kinly Free keeps up to {FREE_LIMITS.plans} upcoming plans, so you can add {roomLeft} more. Untick a few, or explore Kinly Plus for unlimited plans.</p>}
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={!chosen.length || overLimit}><Check size={16} /> {chosen.length ? `Add ${chosen.length} ${chosen.length === 1 ? 'plan' : 'plans'}` : 'Add plans'}</button></div>
+    </form>
+  </ModalFrame>;
 }
 
 function PersonModal({ person, defaultColor, onClose, onSubmit }: { person?: Person; defaultColor: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <ModalFrame title={person ? 'Edit person' : 'Add someone'} eyebrow="YOUR CIRCLE" onClose={onClose}><form onSubmit={onSubmit}><label>Name<input name="name" defaultValue={person?.name} autoFocus placeholder="e.g. Alex Morgan" required /></label><label>Relationship<span className="label-optional">Optional</span><input name="relationship" defaultValue={person?.relationship} placeholder="e.g. close friend, colleague" /></label><label>Context<span className="label-optional">Optional</span><input name="detail" defaultValue={person?.detail} placeholder="What helps you remember this relationship?" /></label><label>Note<span className="label-optional">Optional</span><textarea name="note" defaultValue={person?.note} placeholder="A small thing worth remembering" /></label><ColorField value={person?.color || defaultColor} /><ModalActions onClose={onClose} label={person ? 'Save changes' : 'Add person'} /></form></ModalFrame>; }
