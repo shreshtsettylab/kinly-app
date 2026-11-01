@@ -8,7 +8,7 @@ import { hasSavedData } from './savedData';
 const OPERATOR = 'Shresht Setty';
 const EMAIL = 'shresht.setty2027@mastersunion.org';
 const LOCATION = 'Bengaluru, Karnataka, India';
-const UPDATED = '31 October 2026';
+const UPDATED = '1 November 2026';
 
 export type PolicyPage = 'terms' | 'privacy' | 'refunds' | 'contact';
 
@@ -65,12 +65,22 @@ const pages: Record<PolicyPage, { tag: string; title: string; body: ReactNode }>
       </ul>
       <h2>Payments</h2>
       <p>Payments are handled by Razorpay. Razorpay collects the details needed to process your payment (such as your phone number, email and payment method) under its own privacy policy. We receive the payment reference, amount and status. We never receive your card, UPI or bank details.</p>
+      <h2>Google Calendar (optional)</h2>
+      <p>If you choose “Import from Google Calendar”, Kinly asks Google for read-only access to your calendar events (the <code>calendar.events.readonly</code> permission). Here is exactly what happens:</p>
+      <ul>
+        <li>Your events for the next 30 days are sent by Google straight to your browser. They never pass through or get stored on Kinly’s servers.</li>
+        <li>You choose which events to add. For each one you pick, Kinly saves its title, date, time and location as a plan in your browser, plus Google’s event id so it isn’t added twice. Guest names are used only to suggest who the plan is with, and aren’t saved.</li>
+        <li>Kinly can’t create, change or delete anything in your calendar.</li>
+        <li>The access Google gives Kinly lasts about an hour and is kept only in memory; it’s gone when you close the tab. You can remove Kinly’s access any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+        <li>Google Calendar data is never sold, used for advertising, used to train AI models, or shared with anyone, and Kinly’s AI features don’t send it anywhere unless you add it as a plan and later ask an AI feature about that plan.</li>
+      </ul>
+      <p>Kinly’s use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
       <h2>Usage analytics</h2>
       <p>We use Microsoft Clarity to understand which pages and buttons people use, so we can improve Kinly. Clarity uses cookies to recognise repeat visits. Text inside the app, sign-in, account and checkout screens is masked, so Clarity never sees your notes, names or reflections.</p>
       <h2>AI features (Kinly Plus)</h2>
       <p>Kinly Plus AI features run only when you tap one. That feature’s question and related notes are sent to Cloudflare Workers AI, which runs an open AI model (Meta’s Llama) to write the answer. Cloudflare doesn’t use what’s sent to train AI models, and Kinly doesn’t store it. To count AI credits, we record which feature you used, how many credits it took, whether it worked, and when. We never record what was sent or the answer.</p>
       <h2>What we don’t do</h2>
-      <p>We don’t sell your data, show ads, or share your information except with the service providers named above (Supabase, Razorpay, Microsoft Clarity, Cloudflare and our host, Vercel), and where the law requires it.</p>
+      <p>We don’t sell your data, show ads, or share your information except with the service providers named above (Supabase, Razorpay, Microsoft Clarity, Cloudflare, Google if you connect Google Calendar, and our host, Vercel), and where the law requires it.</p>
       <h2>Your choices</h2>
       <ul>
         <li>Export or delete the data in your browser at any time from Settings.</li>
