@@ -14,15 +14,19 @@ import {
   Download,
   Edit3,
   Home,
+  LogIn,
+  LogOut,
   Menu,
   Plus,
   Search,
   Settings,
   ShieldCheck,
+  CreditCard,
   Sparkles,
   Target,
   Trash2,
   Upload,
+  UserRound,
   Users,
   X,
 } from 'lucide-react';
@@ -30,7 +34,8 @@ import { AccountCard } from './auth/AccountCard';
 import { displayName, useAuth } from './auth/authState';
 import { BackupCard } from './auth/BackupCard';
 import { Link } from './Link';
-import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/storage';
+import { adoptGuestData, createLocalId, readLocalCollection, setStorageScope, writeLocalCollection } from './lib/storage';
+import { navigateTo } from './router';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
 import { findSituation, generalLines, minutesIn } from './scripts';
@@ -631,7 +636,17 @@ function App() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // Load the right space once Kinly knows who is signed in, and again whenever that changes:
+  // each account has its own space on this device, and signed-out visitors have a guest space.
+  const userId = auth.status === 'signedIn' ? auth.user?.id ?? null : null;
+  const authSettled = auth.status !== 'loading';
+  useEffect(() => {
+    if (!authSettled) return;
+    setStorageScope(userId);
+    if (userId) adoptGuestData(userId);
+    setPage('home'); setPersonId(null); setQuestion(''); setSubmittedQuestion(''); setModal(null); setLimitNotice(null);
+    loadData();
+  }, [authSettled, userId]);
 
   const navigate = (nextPage: Page) => {
     setPage(nextPage);
@@ -957,7 +972,7 @@ function App() {
       </aside>
       {mobileOpen && <button className="mobile-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
       <main className="main-content">
-        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="breadcrumb-link" onClick={() => navigate('home')}>Kinly</button><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong aria-current="page">{selectedPerson?.name}</strong></> : <strong aria-current="page">{page === 'you' ? 'You' : navigation.find((item) => item.id === page)?.label}</strong>}</nav><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><button className="top-avatar" onClick={() => navigate('you')} aria-label="Your day and profile" title="Your day and profile">{initialsOf(profileName) || '·'}</button></div></header>
+        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={21} /></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="breadcrumb-link" onClick={() => navigate('home')}>Kinly</button><ChevronRight size={14} />{page === 'person' ? <><button className="breadcrumb-link" onClick={() => navigate('people')}>People</button><ChevronRight size={14} /><strong aria-current="page">{selectedPerson?.name}</strong></> : <strong aria-current="page">{page === 'you' ? 'You' : navigation.find((item) => item.id === page)?.label}</strong>}</nav><div className="topbar-actions"><button className="icon-button" onClick={focusQuestion} aria-label="Ask a question" title={`Ask a question (${shortcutLabel} K)`}><Search size={18} /></button><AccountMenu name={profileName} onNavigate={navigate} /></div></header>
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {limitNotice && !(limitNotice === 'questions' && page === 'home') && <UpgradeNotice kind={limitNotice} resetsOn={limitNotice === 'questions' ? questionsResetOn : undefined} onDismiss={() => setLimitNotice(null)} />}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
@@ -978,6 +993,49 @@ function App() {
       {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
   );
+}
+
+// The top-right avatar: who you are, your profile and settings, your plan, and signing in or out.
+function AccountMenu({ name, onNavigate }: { name: string; onNavigate: (page: Page) => void }) {
+  const auth = useAuth();
+  const [open, setOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setOpen(false); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onClick); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const signedIn = auth.status === 'signedIn';
+  const go = (page: Page) => { setOpen(false); onNavigate(page); };
+  // Signing out leaves this space and returns to the Kinly home page. The data stays on this
+  // device in the account's own space, and comes back the next time this account signs in.
+  const signOut = async () => {
+    setSigningOut(true);
+    await auth.signOut();
+    setSigningOut(false);
+    setOpen(false);
+    navigateTo('/', { replace: true });
+  };
+  return <div className="account-menu" ref={menuRef}>
+    <button className="top-avatar" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu" title="Account menu">{initialsOf(name) || '·'}</button>
+    {open && <div className="account-menu-panel" role="menu">
+      <div className="account-menu-head">
+        <strong>{signedIn ? displayName(auth.user) : name || 'Your space'}</strong>
+        <span>{signedIn ? auth.user?.email : 'Not signed in · saved on this device only'}</span>
+      </div>
+      <button role="menuitem" onClick={() => go('you')}><UserRound size={16} /> Your profile</button>
+      <button role="menuitem" onClick={() => go('settings')}><Settings size={16} /> Settings</button>
+      {signedIn && <Link to="/account" role="menuitem" onClick={() => setOpen(false)}><CreditCard size={16} /> Plan & billing</Link>}
+      <div className="account-menu-divider" />
+      {auth.status === 'unconfigured' ? null : signedIn
+        ? <button role="menuitem" onClick={signOut} disabled={signingOut}><LogOut size={16} /> {signingOut ? 'Signing out…' : 'Sign out'}</button>
+        : <Link to="/signin?next=/app" role="menuitem" onClick={() => setOpen(false)}><LogIn size={16} /> Sign in</Link>}
+    </div>}
+  </div>;
 }
 
 // Ready-made questions built from what is saved, so asking takes a single tap.
@@ -1195,7 +1253,7 @@ function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<Decisi
   const memories = decision.memories.length > 0 && <div className="decision-memories"><span className="card-kicker">{decision.kind === 'talk' ? 'THINGS TO BRING UP' : decision.kind === 'say' ? 'WORDS YOU COULD USE' : 'WHAT YOU SAVED'}</span>{decision.memories.map((memory) => <div className="decision-memory" key={`${memory.label}-${memory.date}-${memory.text}`}><span className="decision-memory-label">{memory.label}{memory.date && ` · ${memory.date}`}</span><p>{memory.text}</p></div>)}</div>;
   const hasDetails = Boolean(decision.summary || (!memoriesFirst && decision.memories.length) || decision.options.length || decision.reasonsToMeet.length || decision.reasonsToPostpone.length || decision.reasonsToGatherMore.length || decision.tradeoffs.length);
   return <div className={`decision-panel tone-${verdict.tone}`} aria-live="polite">
-    <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker} — FROM YOUR SAVED DATA</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
+    <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker}{decision.kind === 'say' ? '' : ' — FROM YOUR SAVED DATA'}</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
     {decision.glance.length > 0 && <dl className="decision-glance">{decision.glance.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
     {ai}
@@ -1403,7 +1461,7 @@ function SettingsPage({ plan, aiEnabled, onToggleAi, counts, onExport, onImport,
   };
   return <div className="page-wrap settings-page">
     <section className="page-heading-row"><div><p className="eyebrow">YOUR DATA</p><h1>Settings</h1><p className="intro">Everything in Kinly stays on this device. Here is how to keep it safe.</p></div></section>
-    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device. They are not sent to Kinly or anyone else, unless you turn on AI features below and use one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
+    <section className="content-card settings-privacy"><div className="reflection-icon"><ShieldCheck size={19} /></div><div><span className="card-kicker">WHERE YOUR DATA LIVES</span><h2>Only in this browser</h2><p>The people, plans, goals and reflections you add are saved in this browser on this device, in a space of their own for each account. Signing out hides them; signing back in brings them back. They are not sent to Kinly or anyone else, unless you turn on AI features below and use one. That also means clearing your browser data, using a private window, or switching to another device will not bring them with you — export a backup to keep a copy.</p><p className="settings-counts">Saved here now: {counts.people} {counts.people === 1 ? 'person' : 'people'} · {plural(counts.plans, 'plan')} · {plural(counts.goals, 'goal')} · {plural(counts.reflections, 'reflection')}</p></div></section>
     <SubscriptionCard plan={plan} />
     <AccountCard />
     <BackupCard onExport={onExport} />
