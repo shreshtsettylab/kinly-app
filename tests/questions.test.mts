@@ -24,6 +24,18 @@ for (const { q, kind, situation } of questionPool) {
   byKind.set(kind, tally);
 }
 
+// Lines must read naturally with and without a name: no "Hey them," or "sorry, them."
+for (const situation of situations) {
+  for (const name of ['', 'Maya']) {
+    for (const line of situation.lines({ name, minutes: null, when: 'tonight' })) {
+      if (/\bthem[,.!]|\b(hey|thank you|congratulations|sorry),? them\b|\$\{|undefined|null/i.test(line) || (name === '' && /, ,|\s,|\s!/.test(line))) {
+        failures++;
+        console.log(`FAIL ${situation.id} reads badly ${name ? `with "${name}"` : 'with no name'}: ${line}`);
+      }
+    }
+  }
+}
+
 // Every situation in the library should have at least one question in the pool.
 const covered = new Set(questionPool.map((item) => item.situation).filter(Boolean));
 const untested = situations.filter((situation) => !covered.has(situation.id)).map((situation) => situation.id);

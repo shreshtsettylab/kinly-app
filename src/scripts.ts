@@ -14,7 +14,9 @@ export type Situation = {
 
 export type ScriptContext = { name: string; minutes: number | null; when: string };
 
-const them = (ctx: ScriptContext) => ctx.name || 'them';
+// The person's name as a greeting (", Maya"), or nothing when no one is named.
+const comma = (ctx: ScriptContext) => (ctx.name ? `, ${ctx.name}` : '');
+const space = (ctx: ScriptContext) => (ctx.name ? ` ${ctx.name}` : '');
 const timeLine = (ctx: ScriptContext) => (ctx.minutes ? `about ${ctx.minutes} minutes` : 'a little while');
 
 // Order matters: more specific situations come first.
@@ -145,7 +147,7 @@ export const situations: Situation[] = [
     intro: 'Don’t over-apologise for the silence. A warm, specific message makes it easy to reply.',
     match: /\b(haven'?t (talked|spoken|seen|heard|messaged|texted)|been (a while|ages|so long)|long time|reconnect|out of touch|lost touch|drifted|ghosted|reach out)\b/,
     lines: (ctx) => [
-      `“Hey ${them(ctx)}, I was just thinking about you. It’s been too long — how have you been?”`,
+      `“Hey${space(ctx)}, I was just thinking about you. It’s been too long — how have you been?”`,
       `“Something reminded me of you today and I realised how long it’s been. Fancy a catch-up soon?”`,
       `“I know I’ve been quiet. No pressure to reply quickly — I’d just love to hear how you are.”`,
     ],
@@ -181,7 +183,7 @@ export const situations: Situation[] = [
     intro: 'You don’t need perfect words. Acknowledge it, say you care, and offer something concrete.',
     match: /\b(lost (their|her|his) (job|mum|mom|dad|father|mother|parent|pet|dog|cat)|loss|passed away|died|funeral|griev\w*|grief|sick|ill(ness)?|hospital|surgery|diagnos\w*|break ?up|broke up|divorce|laid off|going through|sympathy|condolences?)\b/,
     lines: (ctx) => [
-      `“I just heard, and I’m so sorry, ${them(ctx)}. I’m here for you.”`,
+      `“I just heard, and I’m so sorry${comma(ctx)}. I’m here for you.”`,
       `“No need to reply. I’m thinking of you, and I’d like to drop off dinner this week if that would help.”`,
       `“I don’t know exactly what to say, but I care about you. Would a call or a walk help?”`,
     ],
@@ -193,7 +195,7 @@ export const situations: Situation[] = [
     intro: 'Be specific about what you’re happy about, and ask them to tell you more.',
     match: /\b(congrat\w*|promot\w*|new job|engaged|engagement|wedding|married|baby|pregnan\w*|birthday|graduat\w*|anniversary|got (in|the job)|good news)\b/,
     lines: (ctx) => [
-      `“Congratulations, ${them(ctx)}! You worked so hard for this. How are you feeling?”`,
+      `“Congratulations${comma(ctx)}! You worked so hard for this. How are you feeling?”`,
       `“This is such wonderful news. I’d love to celebrate with you — drinks on me soon?”`,
       `“I’m so happy for you. Tell me everything!”`,
     ],
@@ -229,7 +231,7 @@ export const situations: Situation[] = [
     intro: 'Name what they did and the difference it made to you.',
     match: /\b(thank\w*|grateful|appreciat\w*)\b/,
     lines: (ctx) => [
-      `“Thank you, ${them(ctx)}. What you did really helped, and I won’t forget it.”`,
+      `“Thank you${comma(ctx)}. What you did really helped, and I won’t forget it.”`,
       `“I wanted to say how much I appreciated you being there. It meant a lot.”`,
       `“You made my week easier. Thank you for that.”`,
     ],
