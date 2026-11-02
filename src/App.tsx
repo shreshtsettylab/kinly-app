@@ -33,7 +33,8 @@ import { Link } from './Link';
 import { createLocalId, readLocalCollection, writeLocalCollection } from './lib/storage';
 import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
-import { asksForWords, findSituation, generalLines, minutesIn } from './scripts';
+import { findSituation, generalLines, minutesIn } from './scripts';
+import { questionKind } from './questions';
 import { calendarAvailable, preloadCalendar, upcomingEvents, type CalendarEvent } from './calendar';
 import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
@@ -208,13 +209,7 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   // Specific intents first (cancel, talking points, who to contact); then "Should I…" decisions,
   // recall ("how did it go") and timing ("when") questions.
   // Asking for words ("what do I say…") comes first; the scripts library answers those.
-  const kind: NonNullable<DecisionResult>['kind'] = asksForWords.test(q) ? 'say'
-    : /\b(cancel|skip|bail|reschedule|call off)\b/.test(q) ? 'cancel'
-    : /\b(talk about|bring up|conversation|discuss|say to|topics?)\b/.test(q) ? 'talk'
-      : /\bwho\b/.test(q) ? 'who'
-        : /\b(should|shall|worth)\b/.test(q) ? 'decide'
-    : /\b(learn|learned|learnt|remember|recall|notes?|reflect\w*|happened|how did|how was)\b/.test(q) ? 'recall'
-      : /\b(when|how long)\b/.test(q) ? 'when' : 'decide';
+  const kind: NonNullable<DecisionResult>['kind'] = questionKind(q);
   const when = /\btonight\b/.test(q) ? 'tonight' : /\btoday\b/.test(q) ? 'today' : /\btomorrow\b/.test(q) ? 'tomorrow' : /\bweekend\b/.test(q) ? 'this weekend' : 'right now';
   const questionWords = new Set(wordsOf(q));
   const tokens = [...questionWords].filter((word) => word.length > 2 && !stopWords.has(word));
@@ -1002,6 +997,14 @@ function buildQuickQuestions(people: Person[], plans: Plan[], reflections: Refle
   return questions;
 }
 
+// Everyday questions Kinly answers from its own library, before anyone is added.
+const starterQuestions = [
+  'What do I say if I can only stay 10 minutes?',
+  'How do I cancel plans without hurting someone?',
+  'How do I say no to an invite kindly?',
+  'What do I text a friend I haven’t talked to in months?',
+];
+
 type Moment = { kicker: string; title: string; text: string; action: { label: string; personId?: string; question?: string } };
 
 // The Home card picks the most timely thing from saved data, falling back to a gentle prompt.
@@ -1063,7 +1066,8 @@ const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 
 function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { name: string; onTrySamples: () => void; onReflect: () => void; question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
-  const quickQuestions = useMemo(() => buildQuickQuestions(people, allPlans, reflections), [people, allPlans, reflections]);
+  // With nothing saved yet, offer "what do I say" questions, which work without any people.
+  const quickQuestions = useMemo(() => { const built = buildQuickQuestions(people, allPlans, reflections); return built.length ? built : starterQuestions; }, [people, allPlans, reflections]);
   const moment = useMemo(() => buildMoment(people, allPlans, reflections, quietToday), [people, allPlans, reflections, quietToday]);
   const runMoment = () => {
     if (moment.action.personId) onOpenPerson(moment.action.personId);
