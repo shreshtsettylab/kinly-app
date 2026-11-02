@@ -139,7 +139,7 @@ export default function Landing() {
         <div className="lp-hero-split">
           <div className="lp-hero-text">
             <span className="lp-tag lp-rise" style={{ '--d': '0s' } as CSSProperties}>Your personal relationship copilot</span>
-            <h1 id="hero-title" className="lp-hero-title"><Words text="Clearer choices about" /> <em className="lp-accent"><Words text="the people you love." start={3} /></em></h1>
+            <h1 id="hero-title" className="lp-hero-title"><Words text="Clearer choices about" /> <em className="lp-accent"><Words text="the people who matter." start={3} /></em></h1>
             <p className="lp-hero-copy lp-rise" style={{ '--d': '.6s' } as CSSProperties}>Ask a real question. Kinly answers from what you’ve saved, with the reasons shown.</p>
             <div className="lp-hero-ctas lp-rise" style={{ '--d': '.72s' } as CSSProperties}>
               <Link to="/app" className="lp-button lp-button-primary">{returning ? 'Open Kinly' : 'Get started'} <ArrowRight size={16} /></Link>
