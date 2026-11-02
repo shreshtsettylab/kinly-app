@@ -16,7 +16,7 @@ export function AccountCard() {
     <div className="settings-ai-copy">
       <span className="card-kicker">ACCOUNT</span>
       <h2>{signedIn ? displayName(auth.user) : 'Not signed in'}</h2>
-      <p>{signedIn ? `Signed in as ${auth.user?.email ?? 'your account'}. ` : 'An account is optional. '}Your people, plans, goals and reflections live in this browser, in a space for this account. Signing out hides them; they come back when you sign in again. Use “Back up my data” below for a private copy in your account.</p>
+      <p>{signedIn ? `Signed in as ${auth.user?.email ?? 'your account'}.` : 'An account is optional.'} Your data stays in this browser. Signing out hides it; signing in brings it back.</p>
     </div>
     {auth.status === 'loading' ? null : signedIn
       ? <div className="settings-account-actions"><Link to="/account" className="quiet-button">Account</Link><button className="quiet-button" disabled={busy} onClick={async () => { setBusy(true); await auth.signOut(); setBusy(false); navigateTo('/', { replace: true }); }}>{busy ? 'Signing out…' : 'Sign out'}</button></div>

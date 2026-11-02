@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ArrowRight, BookOpen, CalendarDays, Check, Download, HardDrive, Lock, Sparkles, Target, Users } from 'lucide-react';
 import { analyticsEnabled } from '../analytics';
 import { authConfigured } from '../auth/supabaseClient';
@@ -32,6 +32,31 @@ function HeroPreview() {
   </div>;
 }
 
+// A headline that arrives word by word. Each word is still plain text for screen readers.
+function Words({ text, start = 0 }: { text: string; start?: number }) {
+  const words = text.split(' ');
+  return <>{words.map((word, index) => <span key={`${word}-${index}`}><span className="lp-word" style={{ '--i': start + index } as CSSProperties}>{word}</span>{index < words.length - 1 ? ' ' : ''}</span>)}</>;
+}
+
+// The live demo, with the three things Kinly remembers floating around it.
+function HeroScene() {
+  return <div className="lp-scene">
+    <p className="lp-scene-note" aria-hidden="true">Ask, decide,<br />then reflect.<svg viewBox="0 0 60 30" width="54" height="27"><path d="M4 6 C 22 4, 40 10, 50 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /><path d="M43 22 L 51 25 L 52 17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg></p>
+    <div className="lp-scene-card"><HeroPreview /></div>
+    <div className="lp-float lp-float-a" style={{ '--d': '.5s' } as CSSProperties}><span className="lp-float-avatar">MC</span><span><b>Maya Chen</b><small>Close friend · “ask about the move”</small></span></div>
+    <div className="lp-float lp-float-b" style={{ '--d': '.65s' } as CSSProperties}><span className="lp-float-icon"><CalendarDays size={15} /></span><span><b>Dinner at Lupa</b><small>Tomorrow · 7:00 PM</small></span></div>
+    <div className="lp-float lp-float-c" style={{ '--d': '.8s' } as CSSProperties}><span className="lp-float-icon"><BookOpen size={15} /></span><span><b>Felt warm</b><small>Coffee, 12 days ago</small></span></div>
+  </div>;
+}
+
+// The moments Kinly has words for, drifting slowly past. Pauses on hover; still for reduced motion.
+const moments = ['Cancel kindly', 'Say no without guilt', 'Leave early, warmly', 'Reconnect after months', 'Check in on a friend', 'Celebrate their news', 'Ask for money back', 'Say “I miss you”', 'Follow up, no pressure', 'Apologise well'];
+function Moments() {
+  return <div className="lp-marquee" aria-label="Moments Kinly helps with">
+    <div className="lp-marquee-track">{[...moments, ...moments].map((moment, index) => <span key={index} aria-hidden={index >= moments.length}>{moment}<i>✦</i></span>)}</div>
+  </div>;
+}
+
 function DemoSection() {
   const [active, setActive] = useState(0);
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -45,7 +70,7 @@ function DemoSection() {
   };
   const answer = demoAnswers[active];
   return <section className="lp-section" id="product" aria-labelledby="demo-title">
-    <Reveal><SectionIntro id="demo-title" kicker="See it in action" title="A little more context." muted="A better decision.">Pick a question. Each answer below is a prewritten example built from sample people — the public demo doesn’t read anything about you.</SectionIntro></Reveal>
+    <Reveal><SectionIntro id="demo-title" kicker="See it in action" title="A little context." muted="A clearer answer.">Pick a question. These are samples built from example people.</SectionIntro></Reveal>
     <Reveal className="lp-demo">
       <div className="lp-demo-tabs" role="tablist" aria-label="Example questions" aria-orientation="vertical">
         {demoAnswers.map((item, index) => <button key={item.id} ref={(node) => { tabs.current[index] = node; }} role="tab" id={`demo-tab-${item.id}`} aria-selected={active === index} aria-controls="demo-panel" tabIndex={active === index ? 0 : -1} className={active === index ? 'is-active' : ''} onClick={() => setActive(index)} onKeyDown={(event) => onKey(event, index)}><span className="lp-demo-num">0{index + 1}</span>{item.question}</button>)}
@@ -62,18 +87,18 @@ function DemoSection() {
 }
 
 const steps = [
-  { title: 'Add a little context', text: 'Save the people who matter, your plans and up to three monthly goals. A note here, a feeling there.' },
-  { title: 'Ask, and see your options', text: 'Bring a real question. Kinly answers with a clear verdict, the facts behind it, and the trade-offs.' },
-  { title: 'Reflect, then choose with intent', text: 'After time together, write a few lines. Patterns appear, and the next decision gets easier.' },
+  { title: 'Add your people', text: 'A name, a note, a plan. That’s enough to start.' },
+  { title: 'Ask a real question', text: 'Get a clear answer, with the reasons shown.' },
+  { title: 'Reflect afterwards', text: 'A few lines on how it felt. Patterns appear.' },
 ];
 
 const features = [
-  { icon: Users, tag: 'People', title: 'Remember what matters about each person.', text: 'Notes, relationship context, an avatar colour, and a page per person with your shared history.', vignette: <div className="lp-vig-person"><span className="lp-vig-avatar">MC</span><div><b>Maya Chen</b><small>Close friend</small><p>“Ask about the studio move.”</p></div></div> },
-  { icon: CalendarDays, tag: 'Plans', title: 'See your week before it fills up.', text: 'Upcoming and past plans in your own time zone, linked to the people involved.', vignette: <div className="lp-vig-plans"><div><b>Thu</b><span>Dinner with Maya</span><small>7:00 PM</small></div><div><b>Sat</b><span>Walk with Arjun</span><small>10:30 AM</small></div></div> },
-  { icon: Target, tag: 'Goals', title: 'A few priorities, kept honest.', text: 'Up to three active monthly goals — the limit is enforced — plus a weekly connection goal.', vignette: <div className="lp-vig-goals"><span>2 of 3 active priorities</span><i><b style={{ width: '66%' }} /></i><small>Weekly goal · 1 seen · 2 planned</small></div> },
-  { icon: Sparkles, tag: 'Decisions', title: 'Clear answers, with the reasons shown.', text: 'Should I go? How did it go? Should I cancel? Who should I reach out to? Your energy check-in shapes the verdict.', vignette: <div className="lp-vig-verdict"><span className="lp-verdict-mark" /><div><b>Not tonight</b><small>You’re already seeing Arjun on Saturday.</small></div></div>, note: 'Kinly Plus adds AI answers and ready-made words for tricky moments.' },
-  { icon: BookOpen, tag: 'Reflections', title: 'Learn from how time together felt.', text: 'Tag a reflection with a person. Kinly notices feelings and, over a few weeks, gentle patterns.', vignette: <div className="lp-vig-reflect"><small>Mon, Oct 19 · About Maya</small><b>Felt good</b><p>“Warm and easy. She needs room to think out loud.”</p></div> },
-  { icon: Lock, tag: 'Privacy', title: 'Your notes stay on this device.', text: 'Everything is saved in your browser. Export a backup, restore it, or delete everything in one place.', vignette: <div className="lp-vig-privacy"><HardDrive size={18} /><span>Stored in this browser</span><Download size={16} /></div> },
+  { icon: Users, tag: 'People', title: 'Remember what matters about each person.', text: 'A page for each person, with your notes and shared history.', vignette: <div className="lp-vig-person"><span className="lp-vig-avatar">MC</span><div><b>Maya Chen</b><small>Close friend</small><p>“Ask about the studio move.”</p></div></div> },
+  { icon: CalendarDays, tag: 'Plans', title: 'See your week before it fills up.', text: 'Plans linked to people. Import them from Google Calendar.', vignette: <div className="lp-vig-plans"><div><b>Thu</b><span>Dinner with Maya</span><small>7:00 PM</small></div><div><b>Sat</b><span>Walk with Arjun</span><small>10:30 AM</small></div></div> },
+  { icon: Target, tag: 'Goals', title: 'A few priorities, kept honest.', text: 'Three monthly priorities and a weekly connection goal.', vignette: <div className="lp-vig-goals"><span>2 of 3 active priorities</span><i><b style={{ width: '66%' }} /></i><small>Weekly goal · 1 seen · 2 planned</small></div> },
+  { icon: Sparkles, tag: 'Decisions', title: 'Clear answers, with the reasons shown.', text: 'Should I go? What do I say? Your energy shapes the answer.', vignette: <div className="lp-vig-verdict"><span className="lp-verdict-mark" /><div><b>Not tonight</b><small>You’re already seeing Arjun on Saturday.</small></div></div>, note: 'Kinly Plus adds AI answers and ready-made words for tricky moments.' },
+  { icon: BookOpen, tag: 'Reflections', title: 'Learn from how time together felt.', text: 'Write how time together felt. Kinly notices patterns.', vignette: <div className="lp-vig-reflect"><small>Mon, Oct 19 · About Maya</small><b>Felt good</b><p>“Warm and easy. She needs room to think out loud.”</p></div> },
+  { icon: Lock, tag: 'Privacy', title: 'Your notes stay on this device.', text: 'Saved in your browser. Back up or delete any time.', vignette: <div className="lp-vig-privacy"><HardDrive size={18} /><span>Stored in this browser</span><Download size={16} /></div> },
 ];
 
 // Opens Razorpay's payment window; the order and the signature check happen on the server.
@@ -110,24 +135,22 @@ export default function Landing() {
     <a className="lp-skip" href="#main">Skip to content</a>
     <MarketingNav returning={returning} />
     <main id="main">
-      <section className="lp-hero" aria-labelledby="hero-title">
-        <div className="lp-hero-grid">
-          <h1 id="hero-title" className="lp-hero-title">Make more intentional decisions <span className="lp-muted">about the people in your life.</span></h1>
-          <div className="lp-hero-side">
-            <span className="lp-tag lp-tag-solid">Personal decision copilot</span>
-            <p className="lp-hero-copy">Kinly helps you reflect on your relationships, balance your time, and make decisions with greater clarity.</p>
-            <div className="lp-hero-ctas">
+      <section className="lp-hero lp-hero-v2" aria-labelledby="hero-title">
+        <div className="lp-hero-split">
+          <div className="lp-hero-text">
+            <span className="lp-tag lp-rise" style={{ '--d': '0s' } as CSSProperties}>Your personal relationship copilot</span>
+            <h1 id="hero-title" className="lp-hero-title"><Words text="Clearer choices about" /> <em className="lp-accent"><Words text="the people you love." start={3} /></em></h1>
+            <p className="lp-hero-copy lp-rise" style={{ '--d': '.6s' } as CSSProperties}>Ask a real question. Kinly answers from what you’ve saved, with the reasons shown.</p>
+            <div className="lp-hero-ctas lp-rise" style={{ '--d': '.72s' } as CSSProperties}>
               <Link to="/app" className="lp-button lp-button-primary">{returning ? 'Open Kinly' : 'Get started'} <ArrowRight size={16} /></Link>
-              <a href="#how-it-works" className="lp-button lp-button-quiet">Explore how it works</a>
+              <a href="#how-it-works" className="lp-button lp-button-quiet">How it works</a>
             </div>
-            <p className="lp-hero-meta">Free · No sign-up needed · Stays in your browser</p>
+            <p className="lp-hero-meta lp-rise" style={{ '--d': '.84s' } as CSSProperties}>Free · No sign-up · Stays in your browser</p>
           </div>
+          <HeroScene />
         </div>
-        <div className="lp-hero-preview"><HeroPreview /></div>
-        <ul className="lp-pillars" aria-label="What Kinly helps with">
-          {[[Users, 'People'], [CalendarDays, 'Plans'], [Target, 'Goals'], [Sparkles, 'Decisions'], [BookOpen, 'Reflections']].map(([Icon, label]) => { const I = Icon as typeof Users; return <li key={label as string}><I size={20} strokeWidth={1.6} /><span>{label as string}</span></li>; })}
-        </ul>
       </section>
+      <Moments />
 
       <DemoSection />
 
@@ -163,14 +186,14 @@ export default function Landing() {
 
       <section className="lp-privacy" id="privacy" aria-labelledby="privacy-title">
         <Reveal className="lp-privacy-inner">
-          <div><span className="lp-tag lp-tag-dark">Privacy</span><h2 id="privacy-title">Your notes stay with you.</h2><p>Here’s exactly how Kinly handles your data today — no fine print.</p></div>
+          <div><span className="lp-tag lp-tag-dark">Privacy</span><h2 id="privacy-title">Your notes stay with you.</h2><p>How Kinly handles your data, plainly.</p></div>
           <ul className="lp-privacy-list">
-            <li><b>Saved in this browser, on this device.</b> People, plans, goals and reflections never leave it unless you choose to.</li>
-            <li><b>Not synced.</b> Another device or browser starts empty. Clearing your browser data removes everything.</li>
-            <li><b>Backups are yours.</b> Export a file from Settings and restore it anywhere; delete everything in one click.</li>
-            {analyticsEnabled && <li><b>Anonymous usage analytics.</b> We use Microsoft Clarity to see which pages and buttons people use, so we can improve Kinly. Text inside the app and your account is masked — Clarity never sees your notes, names or reflections. It uses cookies to recognise repeat visits.</li>}
+            <li><b>Saved in this browser.</b> Your notes never leave it unless you choose to.</li>
+            <li><b>A space per account.</b> Signing out hides your data; signing in brings it back.</li>
+            <li><b>Backups are yours.</b> Export, restore or delete everything from Settings.</li>
+            {analyticsEnabled && <li><b>Masked analytics.</b> Microsoft Clarity counts page visits; it never sees your notes or names.</li>}
             {authConfigured
-              ? <li><b>Accounts are optional.</b> If you sign in, you can copy your data to a private account that only you can read. Nothing uploads unless you choose to. It isn’t end-to-end encrypted, and it doesn’t sync across devices automatically yet.</li>
+              ? <li><b>Accounts are optional.</b> Back up to a private account only you can read. Nothing uploads unless you choose to.</li>
               : <li><b>No accounts yet.</b> We don’t offer cloud backup, end-to-end encryption or account security today, and we won’t claim to.</li>}
           </ul>
         </Reveal>
