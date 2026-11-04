@@ -13,15 +13,18 @@ import {
   Command,
   Download,
   Edit3,
+  Frown,
   Home,
   LogIn,
   LogOut,
+  Meh,
   Menu,
   Plus,
   Search,
   Settings,
   ShieldCheck,
   CreditCard,
+  Smile,
   Sparkles,
   Target,
   Trash2,
@@ -47,7 +50,10 @@ type Page = 'home' | 'people' | 'person' | 'plans' | 'reflections' | 'goals' | '
 // Archived people stay saved, with their history, but don't count towards the Free limit.
 type Person = Omit<SeedPerson, 'id'> & { id: string; archived?: boolean };
 // calendar_event_id marks a plan imported from Google Calendar, so it isn't imported twice.
-type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string; calendar_event_id?: string };
+// checkin is the one-tap "how was it?" after a plan with someone. skipped means "not now", so Kinly stops asking.
+type Rating = 'good' | 'okay' | 'hard';
+type PlanCheckin = { rating?: Rating; tags?: string[]; at: string; skipped?: boolean };
+type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string; calendar_event_id?: string; checkin?: PlanCheckin };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
 type Reflection = { id: string; text: string; created_at: string; person_id?: string | null };
 type Modal = 'person' | 'plan' | 'goal' | 'calendar' | null;
@@ -56,7 +62,9 @@ type Memory = { label: string; date: string; text: string };
 type Glance = { label: string; value: string };
 type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reason: string };
 type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
-type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling };
+// rhythm: how often you usually see someone, worked out from past plans (needs three or more).
+type Rhythm = { gap: number; since: number; overdue: boolean };
+type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling; rhythm?: Rhythm };
 type Energy = 'low' | 'okay' | 'good' | null;
 type Social = 'company' | 'quiet' | null;
 type Recharge = 'alone' | 'one-on-one' | 'small-group' | '';
@@ -167,13 +175,59 @@ function personInsight(person: Person, plans: Plan[], reflections: Reflection[])
   const upcoming = plans.filter((plan) => plan.person_id === person.id && isUpcoming(plan)).sort(bySoonest);
   const past = plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)).sort((a, b) => bySoonest(b, a));
   const about = reflections.filter((reflection) => reflection.person_id === person.id || wordsOf(reflection.text).includes(firstName)).sort(byNewest);
-  return { upcoming, past, reflections: about, next: upcoming[0], last: past[0], feeling: about[0] ? feelingOf(about[0]) : undefined };
+  // How you felt: the newest of your last rated plan and your last reflection.
+  const rated = past.find((plan) => plan.checkin?.rating);
+  const reflectedAt = about[0] ? `${localDateKey(new Date(about[0].created_at))}T${new Date(about[0].created_at).toTimeString().slice(0, 5)}` : '';
+  const feeling = rated && (!about[0] || planMoment(rated) >= reflectedAt) ? checkinFeeling(rated) : about[0] ? feelingOf(about[0]) : undefined;
+  return { upcoming, past, reflections: about, next: upcoming[0], last: past[0], feeling, rhythm: rhythmOf(past, upcoming[0]) };
 }
 
-function glanceFor({ last, next, feeling }: PersonInsight): Glance[] {
+const ratingLabels: Record<Rating, string> = { good: 'Felt good', okay: 'Felt okay', hard: 'Felt hard' };
+const ratingTones: Record<Rating, Feeling['tone']> = { good: 'positive', okay: 'neutral', hard: 'negative' };
+
+function checkinFeeling(plan: Plan): Feeling | undefined {
+  const rating = plan.checkin?.rating;
+  if (!rating) return undefined;
+  const tags = plan.checkin?.tags ?? [];
+  return { tone: ratingTones[rating], label: ratingLabels[rating], excerpt: tags.length ? `${plan.title} · ${tags.join(', ').toLowerCase()}` : plan.title, date: fmtDate(plan.plan_date) };
+}
+
+// The usual gap between plans with someone (the median, so one long gap doesn't skew it), and
+// whether it has been noticeably longer than that with nothing planned.
+function rhythmOf(past: Plan[], next?: Plan): Rhythm | undefined {
+  const days = [...new Set(past.map((plan) => plan.plan_date))].sort().map((date) => -daysUntil(date));
+  if (days.length < 3) return undefined;
+  const gaps = days.slice(1).map((day, index) => days[index] - day).sort((a, b) => a - b);
+  const middle = Math.floor(gaps.length / 2);
+  const gap = Math.max(1, Math.round(gaps.length % 2 ? gaps[middle] : (gaps[middle - 1] + gaps[middle]) / 2));
+  const since = days[days.length - 1];
+  return { gap, since, overdue: !next && since >= Math.max(Math.round(gap * 1.5), gap + 7) };
+}
+
+// 14 → "every 2 weeks", 30 → "every month"
+function everyPhrase(days: number): string {
+  if (days <= 1) return 'every day';
+  if (days >= 6 && days <= 8) return 'every week';
+  if (days < 11) return `every ${days} days`;
+  if (days < 56) { const weeks = Math.round(days / 7); return weeks === 1 ? 'every week' : `every ${weeks} weeks`; }
+  const months = Math.round(days / 30);
+  return months === 1 ? 'every month' : `every ${months} months`;
+}
+
+// Plans with someone in the last two weeks that have finished (two hours after the start) and
+// haven't been rated or put aside yet, newest first.
+function plansToRate(plans: Plan[], people: Person[]): Plan[] {
+  const now = Date.now();
+  return plans
+    .filter((plan) => plan.person_id && people.some((person) => person.id === plan.person_id) && !plan.checkin && daysUntil(plan.plan_date) >= -14)
+    .filter((plan) => new Date(`${plan.plan_date}T${plan.plan_time.slice(0, 5)}`).getTime() + 2 * 3600000 <= now)
+    .sort((a, b) => bySoonest(b, a));
+}
+
+function glanceFor({ last, next, feeling, rhythm }: PersonInsight): Glance[] {
   return [
-    { label: 'Last time together', value: last ? `${last.title} · ${relativeDay(last.plan_date)}` : 'No past plans saved' },
-    { label: 'How you felt', value: feeling ? `${feeling.label} — “${feeling.excerpt}”` : 'No reflections yet' },
+    { label: 'Last time together', value: last ? `${last.title} · ${relativeDay(last.plan_date)}${rhythm ? ` · you usually meet ${everyPhrase(rhythm.gap)}` : ''}` : 'No past plans saved' },
+    { label: 'How you felt', value: feeling ? `${feeling.label} — “${feeling.excerpt}”` : 'Not rated yet' },
     { label: 'Next plan', value: next ? `${next.title} · ${relativeDay(next.plan_date)} at ${fmtTime(next.plan_time)}` : 'Nothing planned yet' },
   ];
 }
@@ -241,7 +295,11 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
   const personName = person?.name || '';
   const firstName = personName.split(' ')[0];
   const reflectionMemory = (reflection: Reflection): Memory => ({ label: 'Reflection', date: reflectionDate(reflection), text: reflection.text });
-  const planMemory = (plan: Plan): Memory => ({ label: plan.title, date: fmtDate(plan.plan_date), text: plan.context || 'No context saved for this plan.' });
+  const planMemory = (plan: Plan): Memory => {
+    const rated = checkinFeeling(plan);
+    const tags = plan.checkin?.tags?.length ? ` (${plan.checkin.tags.join(', ').toLowerCase()})` : '';
+    return { label: plan.title, date: fmtDate(plan.plan_date), text: [rated ? `You rated it: ${lowerFirst(rated.label)}${tags}.` : '', plan.context].filter(Boolean).join(' ') || 'No context saved for this plan.' };
+  };
   const base = { kind, glance: insight ? glanceFor(insight) : [], summary: '', memories: [] as Memory[], options: [] as DecisionOption[], reasonsToMeet: [] as string[], reasonsToPostpone: [] as string[], reasonsToGatherMore: [] as string[], tradeoffs: [] as string[], followUp: null as string | null, matchedPeople, matchedPlans };
 
   // --- Say: ready-to-use words for a situation, personalised with what they saved ---
@@ -268,11 +326,11 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
       ...found.slice(0, 5).map(reflectionMemory),
       ...pastPlans.slice(0, 3).map(planMemory),
     ];
-    const latest = found[0] ? feelingOf(found[0]) : undefined;
+    const latest = insight ? insight.feeling : found[0] ? feelingOf(found[0]) : undefined;
     const verdict: Verdict = person
-      ? { tone: 'info', headline: latest ? `${latest.label} last time` : `No reflections about ${firstName} yet`, reason: insight?.last ? `Your last plan together was "${insight.last.title}", ${relativeDay(insight.last.plan_date)}.` : `There are no past plans with ${firstName} saved yet.` }
+      ? { tone: 'info', headline: latest ? `${latest.label} last time` : `No check-ins about ${firstName} yet`, reason: insight?.last ? `Your last plan together was "${insight.last.title}", ${relativeDay(insight.last.plan_date)}.` : `There are no past plans with ${firstName} saved yet.` }
       : { tone: 'info', headline: memories.length ? 'Here is what you saved' : 'Nothing saved about this yet', reason: memories.length ? `${found.length} reflection${found.length === 1 ? '' : 's'} and ${pastPlans.length} past plan${pastPlans.length === 1 ? '' : 's'} match your question.` : 'Try a person’s name, or tap one of the quick questions.' };
-    const followUp = found.length || !person ? null : `After your next time with ${firstName}, write a few lines in Reflections and tag them — it will show up here.`;
+    const followUp = latest || !person ? null : `After your next time with ${firstName}, Kinly will ask how it went on Home. One tap is enough.`;
     return { ...base, verdict, memories, followUp };
   }
 
@@ -754,6 +812,13 @@ function App() {
     loadData();
   };
 
+  // One-tap check-ins are saved straight onto the plan.
+  const setPlanCheckin = (id: string, checkin: PlanCheckin | undefined) => {
+    const next = plans.map((plan) => plan.id === id ? { ...plan, checkin } : plan);
+    writeLocalCollection('plans', next);
+    setPlans(next);
+  };
+
   const deletePlan = async (id: string) => {
     if (!window.confirm('Delete this plan?')) return;
     writeLocalCollection('plans', plans.filter((plan) => plan.id !== id));
@@ -976,7 +1041,7 @@ function App() {
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {limitNotice && !(limitNotice === 'questions' && page === 'home') && <UpgradeNotice kind={limitNotice} resetsOn={limitNotice === 'questions' ? questionsResetOn : undefined} onDismiss={() => setLimitNotice(null)} />}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage name={profileName} onTrySamples={() => { loadExamples(); }} onReflect={() => navigate('reflections')} question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} questionNote={limitNotice === 'questions' ? <UpgradeNotice kind="questions" resetsOn={questionsResetOn} onDismiss={() => setLimitNotice(null)} /> : questionsLeft !== null ? <p className="questions-left">{questionsLeft} of {FREE_QUESTIONS_PER_MONTH} free questions left this month · resets {questionsResetOn}</p> : null} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage name={profileName} onTrySamples={() => { loadExamples(); }} onReflect={() => navigate('reflections')} question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} questionNote={limitNotice === 'questions' ? <UpgradeNotice kind="questions" resetsOn={questionsResetOn} onDismiss={() => setLimitNotice(null)} /> : questionsLeft !== null ? <p className="questions-left">{questionsLeft} of {FREE_QUESTIONS_PER_MONTH} free questions left this month · resets {questionsResetOn}</p> : null} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} onCheckin={setPlanCheckin} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} onArchive={(archived) => archivePerson(selectedPerson.id, archived)} ai={<div className="person-ai"><AiPanel key={`prep-${selectedPerson.id}`} feature="conversation_prep" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Conversation preparation suggests an opener and what to follow up on, from your own notes." /><AiPanel key={`analysis-${selectedPerson.id}`} feature="relationship_analysis" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Detailed relationship analysis looks at the rhythm of your time together and how it has felt." /></div>} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
@@ -1073,10 +1138,11 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[],
     const person = people.find((item) => item.id === soon.person_id) as Person;
     const { feeling } = personInsight(person, plans, reflections);
     const when = daysUntil(soon.plan_date) === 0 ? 'today' : 'tomorrow';
+    const brief = [person.note ? `Your note: “${person.note}”` : '', feeling ? `Last time ${lowerFirst(feeling.label)} — “${feeling.excerpt}”.` : ''].filter(Boolean).join(' ');
     return {
       kicker: when === 'today' ? 'TODAY' : 'COMING UP TOMORROW',
       title: `${soon.title} with ${first(person)}, ${when} at ${fmtTime(soon.plan_time)}.`,
-      text: person.note ? `Your note: “${person.note}”` : feeling ? `Last time: ${lowerFirst(feeling.label)} — “${feeling.excerpt}”` : soon.context || 'A good moment to think about what you want from the time together.',
+      text: brief || soon.context || 'A good moment to think about what you want from the time together.',
       action: { label: `Open ${first(person)}’s page`, personId: person.id },
     };
   }
@@ -1088,16 +1154,20 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[],
       action: { label: 'Reflect for a minute' },
     };
   }
+  // Someone you usually see more often than this, or, without enough history, 21 days or more.
   const quiet = people
     .map((person) => ({ person, insight: personInsight(person, plans, reflections) }))
-    .filter(({ insight }) => insight.last && !insight.next && -daysUntil(insight.last.plan_date) >= 21)
-    .sort((a, b) => (a.insight.last as Plan).plan_date.localeCompare((b.insight.last as Plan).plan_date))[0];
+    .filter(({ insight }) => isDrifting(insight))
+    .map((entry) => ({ ...entry, stretch: -daysUntil((entry.insight.last as Plan).plan_date) / (entry.insight.rhythm?.gap ?? 21) }))
+    .sort((a, b) => b.stretch - a.stretch)[0];
   if (quiet) {
     const name = first(quiet.person);
+    const { rhythm, feeling } = quiet.insight;
+    const since = -daysUntil((quiet.insight.last as Plan).plan_date);
     return {
       kicker: 'A GENTLE NUDGE',
-      title: `It has been ${-daysUntil((quiet.insight.last as Plan).plan_date)} days since you saw ${name}.`,
-      text: 'A short message can keep things warm — no plan needed.',
+      title: rhythm ? `You usually see ${name} ${everyPhrase(rhythm.gap)}. It’s been ${since} days.` : `It has been ${since} days since you saw ${name}.`,
+      text: feeling?.tone === 'positive' ? 'Last time felt good. A short message can keep things warm, no plan needed.' : 'A short message can keep things warm, no plan needed.',
       action: { label: `Should I reach out to ${name}?`, question: `Should I reach out to ${name}?` },
     };
   }
@@ -1121,7 +1191,7 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, questionRef, people, plans, allPlans, reflections, goals }: { name: string; onTrySamples: () => void; onReflect: () => void; question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, onCheckin, questionRef, people, plans, allPlans, reflections, goals }: { name: string; onTrySamples: () => void; onReflect: () => void; question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   // With nothing saved yet, offer "what do I say" questions, which work without any people.
@@ -1146,7 +1216,58 @@ function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubm
   const hour = new Date().getHours();
   const greeting = `${hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}${name ? `, ${name.split(' ')[0]}` : ''}.`;
   const fresh = people.length === 0;
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>{greeting}</h1><p className="intro">{fresh ? 'This is your private space for the people in your life. It starts empty, and it’s all yours.' : 'Think clearly about your time, your relationships, and the choices between them.'}</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section>{fresh ? <GettingStarted onAddPerson={onAddPerson} onAddPlan={onAddPlan} onReflect={onReflect} onTrySamples={onTrySamples} /> : <><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section></>}{askSection}{!fresh && <><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><section className="content-card weekly-review"><div><span className="card-kicker">KINLY PLUS · WEEKLY REVIEW</span><h2>Look back, look ahead</h2><p>Who you saw this week, how it felt, and what the week ahead could hold.</p></div>{weekly}</section><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></>}</div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>{greeting}</h1><p className="intro">{fresh ? 'This is your private space for the people in your life. It starts empty, and it’s all yours.' : 'Think clearly about your time, your relationships, and the choices between them.'}</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section>{fresh ? <GettingStarted onAddPerson={onAddPerson} onAddPlan={onAddPlan} onReflect={onReflect} onTrySamples={onTrySamples} /> : <><CheckinCard people={people} plans={allPlans} onCheckin={onCheckin} onReflect={onReflect} /><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section></>}{askSection}{!fresh && <><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><section className="content-card weekly-review"><div><span className="card-kicker">KINLY PLUS · WEEKLY REVIEW</span><h2>Look back, look ahead</h2><p>Who you saw this week, how it felt, and what the week ahead could hold.</p></div>{weekly}</section><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></>}</div>;
+}
+
+// "How was it?" after time with someone. One tap saves it; a few optional words add colour.
+const ratingChoices: { value: Rating; label: string; icon: ReactNode }[] = [
+  { value: 'good', label: 'Good', icon: <Smile size={22} /> },
+  { value: 'okay', label: 'Okay', icon: <Meh size={22} /> },
+  { value: 'hard', label: 'Hard', icon: <Frown size={22} /> },
+];
+const ratingTags: Record<Rating, string[]> = {
+  good: ['Energising', 'Meaningful', 'Fun', 'Easy'],
+  okay: ['Fine', 'Too short', 'Rushed', 'Tired'],
+  hard: ['Draining', 'Tense', 'Awkward', 'Rushed'],
+};
+
+function CheckinCard({ people, plans, onCheckin, onReflect }: { people: Person[]; plans: Plan[]; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; onReflect: () => void }) {
+  // The plan just rated stays on the card so its words can be added before moving on.
+  const [ratedId, setRatedId] = useState<string | null>(null);
+  const waiting = plansToRate(plans, people);
+  const rated = ratedId ? plans.find((plan) => plan.id === ratedId && plan.checkin?.rating) : undefined;
+  const plan = rated ?? waiting[0];
+  if (!plan) return null;
+  const person = people.find((item) => item.id === plan.person_id) as Person;
+  const first = person.name.split(' ')[0];
+  const more = waiting.filter((item) => item.id !== plan.id).length;
+  const rating = rated?.checkin?.rating;
+  const tags = rated?.checkin?.tags ?? [];
+  const toggleTag = (tag: string) => onCheckin(plan.id, { ...(rated?.checkin as PlanCheckin), tags: tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag] });
+  return <section className="checkin-card" aria-label={`How was it with ${first}?`}>
+    <div className="checkin-head">
+      <Avatar person={person} size="sm" />
+      <div><span className="card-kicker">AFTER YOUR TIME TOGETHER</span><h2>{rating ? `${ratingLabels[rating]}. Noted.` : `How was it with ${first}?`}</h2><p>{plan.title} · {relativeDay(plan.plan_date)}</p></div>
+    </div>
+    {!rating ? <>
+      <div className="checkin-ratings" role="group" aria-label="How it felt">{ratingChoices.map((choice) => <button type="button" key={choice.value} className={`checkin-rating checkin-${choice.value}`} onClick={() => { onCheckin(plan.id, { rating: choice.value, tags: [], at: new Date().toISOString() }); setRatedId(plan.id); }}>{choice.icon}<span>{choice.label}</span></button>)}</div>
+      <div className="checkin-foot"><button type="button" className="text-button" onClick={() => onCheckin(plan.id, { skipped: true, at: new Date().toISOString() })}>Didn’t happen, or skip</button>{more > 0 && <span>{more} more to rate</span>}</div>
+    </> : <>
+      <p className="checkin-ask">Anything stand out? Optional.</p>
+      <div className="checkin-tags">{ratingTags[rating].map((tag) => <button type="button" key={tag} className={`checkin-tag ${tags.includes(tag) ? 'checkin-tag-on' : ''}`} aria-pressed={tags.includes(tag)} onClick={() => toggleTag(tag)}>{tags.includes(tag) && <Check size={13} />}{tag}</button>)}</div>
+      <div className="checkin-foot">
+        <button type="button" className="primary-button" onClick={() => setRatedId(null)}>{more > 0 ? `Done · ${more} more` : 'Done'}</button>
+        <button type="button" className="text-button" onClick={onReflect}>Write a few lines instead</button>
+        <button type="button" className="text-button checkin-undo" onClick={() => { onCheckin(plan.id, undefined); setRatedId(null); }}>Undo</button>
+      </div>
+    </>}
+  </section>;
+}
+
+// No plan coming up, and either past your usual rhythm or 21 days or more since you met.
+function isDrifting(insight: PersonInsight): boolean {
+  if (!insight.last || insight.next) return false;
+  return insight.rhythm ? insight.rhythm.overdue : -daysUntil(insight.last.plan_date) >= 21;
 }
 
 // A monthly read on the circle: who you saw, who feels good to be around, who may be drifting.
@@ -1163,10 +1284,13 @@ function CircleInsights({ people, plans, reflections, weeklyGoal, onOpenPerson, 
   const seen = entries.filter(({ insight }) => insight.past.some((plan) => plan.plan_date.startsWith(month)));
   const feelsGood = entries.filter(({ insight }) => insight.feeling?.tone === 'positive');
   const drifting = entries
-    .filter(({ insight }) => !insight.next && (!insight.last || -daysUntil(insight.last.plan_date) >= 21))
+    .filter(({ insight }) => !insight.next && (!insight.last || isDrifting(insight)))
     .map((entry) => ({ ...entry, days: entry.insight.last ? -daysUntil(entry.insight.last.plan_date) : null }))
     .sort((a, b) => (b.days ?? 999) - (a.days ?? 999));
-  const recent = reflections.filter((reflection) => Date.now() - new Date(reflection.created_at).getTime() <= 30 * 86400000).map(feelingOf);
+  const recent = [
+    ...reflections.filter((reflection) => Date.now() - new Date(reflection.created_at).getTime() <= 30 * 86400000).map(feelingOf),
+    ...plans.filter((plan) => !isUpcoming(plan) && daysUntil(plan.plan_date) >= -30).map(checkinFeeling).filter((feeling): feeling is Feeling => !!feeling),
+  ];
   const count = (tone: Feeling['tone']) => recent.filter((feeling) => feeling.tone === tone).length;
   const chip = (person: Person, detail?: string) => <button key={person.id} className="insight-person" onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="xs" /><span>{person.name.split(' ')[0]}</span>{detail && <small>{detail}</small>}</button>;
   if (!people.length) return null;
@@ -1177,10 +1301,10 @@ function CircleInsights({ people, plans, reflections, weeklyGoal, onOpenPerson, 
       : <button className="deeper-invite week-goal-invite" onClick={onOpenYou}><Target size={14} /> Set a weekly connection goal</button>}
     <div className="insight-grid">
       <div className="insight-col"><span className="insight-label">Time together this month</span><strong className="insight-number">{seen.length}<small> of {people.length} people</small></strong><div className="insight-people">{seen.length ? seen.map(({ person }) => chip(person)) : <p className="insight-empty">No plans with anyone yet this month.</p>}</div></div>
-      <div className="insight-col"><span className="insight-label">Feels good with</span><div className="insight-people">{feelsGood.length ? feelsGood.map(({ person }) => chip(person)) : <p className="insight-empty">Write a reflection after time together to see who leaves you feeling good.</p>}</div></div>
+      <div className="insight-col"><span className="insight-label">Feels good with</span><div className="insight-people">{feelsGood.length ? feelsGood.map(({ person }) => chip(person)) : <p className="insight-empty">After time together, tap how it felt on Home to see who leaves you feeling good.</p>}</div></div>
       <div className="insight-col"><span className="insight-label">Might be drifting</span><div className="insight-people">{drifting.length ? drifting.slice(0, 4).map(({ person, days }) => chip(person, days !== null ? `${days}d` : 'not yet')) : <p className="insight-empty">Everyone has been seen recently or has a plan coming up.</p>}</div></div>
     </div>
-    <p className="insight-footer">{recent.length ? <>Your last 30 days of reflections: <b>{count('positive')}</b> felt good · <b>{count('mixed')}</b> mixed · <b>{count('negative')}</b> draining{count('neutral') ? <> · <b>{count('neutral')}</b> neutral</> : null}</> : 'No reflections in the last 30 days yet.'}</p>
+    <p className="insight-footer">{recent.length ? <>Your last 30 days: <b>{count('positive')}</b> felt good · <b>{count('mixed')}</b> mixed · <b>{count('negative')}</b> draining{count('neutral') ? <> · <b>{count('neutral')}</b> neutral</> : null}</> : 'Nothing rated in the last 30 days yet.'}</p>
   </section>;
 }
 
@@ -1199,7 +1323,7 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
   const first = person.name.split(' ')[0];
   // Past plans and reflections in one timeline, newest first.
   const history = [
-    ...insight.past.map((plan) => ({ id: plan.id, kind: 'plan' as const, sortKey: planMoment(plan), date: fmtDate(plan.plan_date), title: plan.title, text: plan.context })),
+    ...insight.past.map((plan) => ({ id: plan.id, kind: 'plan' as const, sortKey: planMoment(plan), date: fmtDate(plan.plan_date), title: plan.checkin?.rating ? `${plan.title} · ${lowerFirst(ratingLabels[plan.checkin.rating])}` : plan.title, text: [plan.checkin?.tags?.join(', '), plan.context].filter(Boolean).join(' · ') })),
     ...insight.reflections.map((reflection) => ({ id: reflection.id, kind: 'reflection' as const, sortKey: `${localDateKey(new Date(reflection.created_at))}T${new Date(reflection.created_at).toTimeString().slice(0, 5)}`, date: reflectionDate(reflection), title: feelingOf(reflection).label, text: reflection.text })),
   ].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
   return <div className="page-wrap person-page">
@@ -1382,7 +1506,8 @@ function findPatterns(checkins: CheckIn[], people: Person[], plans: Plan[], refl
   const quietDays = rated.filter((checkin) => checkin.social === 'quiet').length;
   if (rated.length >= 7 && quietDays / rated.length >= 0.5) patterns.push('You’ve wanted quiet on most days lately — it may be worth protecting a free evening.');
   people.forEach((person) => {
-    const tones = personInsight(person, plans, reflections).reflections.map((reflection) => feelingOf(reflection).tone);
+    const insight = personInsight(person, plans, reflections);
+    const tones = [...insight.reflections.map((reflection) => feelingOf(reflection).tone), ...insight.past.map((plan) => checkinFeeling(plan)?.tone).filter((tone): tone is Feeling['tone'] => !!tone)];
     const first = person.name.split(' ')[0];
     if (tones.length >= 2 && tones.filter((tone) => tone === 'positive').length / tones.length >= 0.66) patterns.push(`Time with ${first} usually leaves you feeling good.`);
     if (tones.length >= 2 && tones.filter((tone) => tone === 'negative').length / tones.length >= 0.66) patterns.push(`Time with ${first} has often felt draining — shorter plans may help.`);

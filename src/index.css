@@ -207,6 +207,30 @@ h1 { margin-bottom: 13px; color: var(--text-primary); font-size: clamp(34px, 4vw
 }
 .reflection-copy { flex: 1; }
 .reflection-card h2 { margin: 6px 0 7px; font-size: 25px; }
+
+/* ─── One-tap check-in after time together ─────────────────────────────────── */
+.checkin-card { margin-top: 43px; padding: 22px 24px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-card); animation: checkin-in .35s ease both; }
+.checkin-card + .reflection-card { margin-top: 16px; }
+.checkin-head { display: flex; align-items: center; gap: 14px; }
+.checkin-head h2 { margin: 4px 0 2px; font-size: 25px; }
+.checkin-head p { margin: 0; color: var(--text-muted); font-size: 15px; }
+.checkin-ratings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.checkin-rating { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 8px; border: 1px solid var(--border-mid); border-radius: 10px; color: var(--text-primary); background: var(--surface-bg); font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
+.checkin-rating:hover { transform: translateY(-2px); }
+.checkin-rating:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 2px; }
+.checkin-good:hover { border-color: var(--color-success); color: var(--color-success); background: #EEF5F0; }
+.checkin-okay:hover { border-color: var(--brand-500); color: var(--brand-700); background: var(--brand-100); }
+.checkin-hard:hover { border-color: var(--clay-600); color: var(--clay-700); background: var(--clay-50); }
+.checkin-ask { margin: 16px 0 10px; color: var(--text-secondary); font-size: 15px; }
+.checkin-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.checkin-tag { display: inline-flex; align-items: center; gap: 5px; padding: 8px 14px; border: 1px solid var(--border-mid); border-radius: 999px; color: var(--text-primary); background: var(--surface-card); font: inherit; font-size: 15px; cursor: pointer; }
+.checkin-tag-on { border-color: var(--clay-600); color: var(--clay-ink); background: var(--clay-100); }
+.checkin-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 16px; color: var(--text-muted); font-size: 14px; }
+.checkin-foot > span { margin-left: auto; }
+.checkin-undo { margin-left: auto; color: var(--text-muted); }
+@keyframes checkin-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 700px) { .checkin-card { padding: 18px; } .checkin-head h2 { font-size: 22px; } }
+@media (prefers-reduced-motion: reduce) { .checkin-card { animation: none; } .checkin-rating:hover { transform: none; } }
 .reflection-card p { max-width: 640px; margin-bottom: 0; color: var(--text-secondary); font-size: 15px; line-height: 1.65; }
 
 /* ─── Ask section ───────────────────────────────────────────────────────────── */
