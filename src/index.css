@@ -991,3 +991,17 @@ kbd {
 .connect-upsell { display: inline-flex; align-items: center; gap: 6px; color: var(--clay-600); font-size: 14.5px; font-weight: 600; text-decoration: none; }
 .connect-upsell:hover { text-decoration: underline; }
 @media (max-width: 700px) { .connect-button { width: 100%; justify-content: center; } }
+
+/* Google Calendar shortcuts */
+.welcome-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.gcal-button, .gcal-connect { display: inline-flex; align-items: center; gap: 9px; }
+.gcal-icon { flex-shrink: 0; border-radius: 3px; box-shadow: 0 0 0 1px rgba(32, 40, 51, .08); }
+.start-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin-top: 18px; }
+.start-extras .start-samples { margin-top: 0; }
+.calendar-heads-up { margin: 14px 0 16px; padding: 12px 14px; border: 1px solid var(--clay-100); border-radius: 8px; background: var(--clay-50); }
+.calendar-heads-up strong { color: var(--clay-ink); font-size: 14.5px; }
+.calendar-heads-up p { margin: 4px 0 0; color: var(--text-secondary); font-size: 14.5px; line-height: 1.55; }
+@media (max-width: 700px) {
+  .welcome-actions { justify-content: flex-start; margin-top: 25px; }
+  .welcome-row .welcome-actions .quiet-button { margin-top: 0; }
+}
