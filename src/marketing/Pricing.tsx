@@ -11,7 +11,7 @@ const freeFeatures = [
   `Up to ${FREE_LIMITS.people} people in your circle`,
   `${FREE_QUESTIONS_PER_MONTH} questions a month, answered from your own notes`,
   'Unlimited reflections and notes',
-  `Up to ${FREE_LIMITS.plans} active plans and ${FREE_LIMITS.goals} active goals`,
+  `${FREE_LIMITS.plans} new plans a month and up to ${FREE_LIMITS.goals} active goals`,
   'Relationship history and basic reminders',
   'Export your data any time',
 ];
@@ -30,7 +30,7 @@ const plusFeatures = [
 const comparison: [string, string, string][] = [
   ['People in your circle', `Up to ${FREE_LIMITS.people} active`, 'Unlimited'],
   ['Questions', `${FREE_QUESTIONS_PER_MONTH} a month`, 'Unlimited'],
-  ['Active plans', `Up to ${FREE_LIMITS.plans}`, 'Unlimited'],
+  ['Plans', `${FREE_LIMITS.plans} new a month`, 'Unlimited'],
   ['Active goals', `Up to ${FREE_LIMITS.goals}`, 'Unlimited'],
   ['Reflections and notes', 'Unlimited', 'Unlimited'],
   ['Decision support', 'Clear verdicts from your saved notes', 'Plus advanced AI analysis'],

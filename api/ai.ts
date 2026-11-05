@@ -38,7 +38,7 @@ const Input = z.object({
     person: z.object({ name: text(80), relationship: text(80), detail: text(300), note: text(600) }).nullable().optional(),
     plans: z.array(planItem).max(20).default([]),
     reflections: z.array(z.object({ date: text(60), about: text(80).optional(), text: text(1200) })).max(10).default([]),
-    circle: z.array(z.object({ name: text(80), last: text(100), next: text(100), feeling: text(60) })).max(12).default([]),
+    circle: z.array(z.object({ name: text(80), last: text(100), next: text(100), feeling: text(60), usualGap: text(40).optional(), askAbout: z.array(text(140)).max(2).optional(), youSaidYoudDo: z.array(text(140)).max(2).optional(), afterLastTime: text(40).optional() })).max(12).default([]),
     goals: z.array(z.object({ title: text(120), category: text(30), description: text(300) })).max(10).default([]),
   }),
 });
@@ -76,7 +76,8 @@ const TASKS: Record<Feature, string> = {
 - verdict: "go" (yes, do it), "hold" (not now), "maybe" (genuinely balanced), or "info" (the question asks for a summary or ideas rather than a decision).
 - headline: such as "Yes — go for it", "Not tonight" or "Lead with listening".
 - points: the strongest considerations each way, a gentler alternative, or something to notice.
-"aboutYou" is how they checked in today; weigh it alongside the notes, especially their energy and whether they want company. The instant answer comes from Kinly's simple rules; agree or disagree with it, and say why if you disagree.`,
+"aboutYou" is how they checked in today; weigh it alongside the notes, especially their energy and whether they want company. The instant answer comes from Kinly's simple rules; agree or disagree with it, and say why if you disagree.
+If they ask who to connect or reach out to, use "circle" and "goals": pick one or two people (time since they met against their usual gap, how it felt, what to ask about, anything they said they'd do, their goals), and skip anyone they wanted a break from. Make points concrete: the action (text, call or plan) and a short, warm message they could send as-is, written in plain everyday words.`,
   conversation_prep: `Task: help them prepare for their next conversation with this person. verdict is "info".
 - headline: the spirit of the conversation, such as "Lead with listening".
 - reason: why, from what they saved.

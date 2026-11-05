@@ -22,7 +22,7 @@ export function SubscriptionCard({ plan, showUsage = false }: { plan: PlanState;
       <ul className="sub-limits">
         <li><b>{FREE_LIMITS.people}</b> people allowed</li>
         <li><b>{FREE_QUESTIONS_PER_MONTH}</b> questions a month</li>
-        <li><b>{FREE_LIMITS.plans}</b> active plans allowed</li>
+        <li><b>{FREE_LIMITS.plans}</b> new plans a month</li>
         <li><b>{FREE_LIMITS.goals}</b> active goals allowed</li>
         <li>Unlimited reflections and notes</li>
       </ul>
@@ -78,7 +78,7 @@ function ManageSubscription({ plan }: { plan: PlanState }) {
 const limitCopy: Record<NoticeKind, { title: string; text: string }> = {
   questions: { title: `You’ve asked ${FREE_QUESTIONS_PER_MONTH} questions this month`, text: 'That’s the Kinly Free allowance. Everything you’ve saved stays open, and reflections are unlimited. Kinly Plus has unlimited questions.' },
   people: { title: `Your circle has ${FREE_LIMITS.people} people`, text: `That’s the most Kinly Free keeps active. Archive someone you see less often to make room — their history stays — or move to Kinly Plus for unlimited people.` },
-  plans: { title: `You have ${FREE_LIMITS.plans} upcoming plans`, text: 'That’s the Free limit for active plans. Past plans don’t count, so this frees up as plans happen. Kinly Plus has no limit.' },
+  plans: { title: `You’ve added ${FREE_LIMITS.plans} plans this month`, text: 'That’s the Kinly Free allowance. It starts again on the 1st, and everything you’ve saved stays open. Kinly Plus has unlimited plans.' },
   goals: { title: `You have ${FREE_LIMITS.goals} active goals`, text: 'That’s the Free limit. Mark one completed to make room, or move to Kinly Plus for unlimited goals.' },
 };
 

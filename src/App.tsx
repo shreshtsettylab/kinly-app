@@ -10,7 +10,7 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
-  Command,
+  ArrowRight,
   Download,
   Edit3,
   Frown,
@@ -43,6 +43,7 @@ import { people as seedPeople, type Person as SeedPerson } from './mockData';
 import { AiPanel, SubscriptionCard, UpgradeNotice } from './plan/PlanParts';
 import { findSituation, generalLines, minutesIn } from './scripts';
 import { questionKind } from './questions';
+import { readText } from './feelings';
 import { calendarAvailable, preloadCalendar, upcomingEvents, type CalendarEvent } from './calendar';
 import { FREE_LIMITS, FREE_QUESTIONS_PER_MONTH, fmtLongDate, usePlan, type LimitKind, type NoticeKind } from './subscription';
 
@@ -52,10 +53,12 @@ type Person = Omit<SeedPerson, 'id'> & { id: string; archived?: boolean };
 // calendar_event_id marks a plan imported from Google Calendar, so it isn't imported twice.
 // checkin is the one-tap "how was it?" after a plan with someone. skipped means "not now", so Kinly stops asking.
 type Rating = 'good' | 'okay' | 'hard';
-type PlanCheckin = { rating?: Rating; tags?: string[]; at: string; skipped?: boolean };
+// after: how you felt afterwards. again: when you'd like to see them next. inferred: rated from your words.
+type PlanCheckin = { rating?: Rating; tags?: string[]; at: string; skipped?: boolean; inferred?: boolean; after?: 'up' | 'same' | 'down'; again?: 'sooner' | 'usual' | 'break' };
 type Plan = { id: string; title: string; plan_date: string; plan_time: string; person_id: string | null; category: string; context: string; calendar_event_id?: string; checkin?: PlanCheckin };
 type Goal = { id: string; title: string; description: string; category: string; status: 'active' | 'completed'; month_start: string };
-type Reflection = { id: string; text: string; created_at: string; person_id?: string | null };
+// plan_id links the words written in a check-in to that plan.
+type Reflection = { id: string; text: string; created_at: string; person_id?: string | null; plan_id?: string | null };
 type Modal = 'person' | 'plan' | 'goal' | 'calendar' | null;
 type DecisionOption = { label: string; detail: string; evidence: string };
 type Memory = { label: string; date: string; text: string };
@@ -64,12 +67,16 @@ type Verdict = { tone: 'go' | 'hold' | 'maybe' | 'info'; headline: string; reaso
 type Feeling = { tone: 'positive' | 'negative' | 'mixed' | 'neutral'; label: string; excerpt: string; date: string };
 // rhythm: how often you usually see someone, worked out from past plans (needs three or more).
 type Rhythm = { gap: number; since: number; overdue: boolean };
-type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling; rhythm?: Rhythm };
+// forNextTime and promises come from what you wrote since you last met: things coming up for them,
+// and things you said you'd do.
+type Noted = { text: string; date: string };
+type PersonInsight = { upcoming: Plan[]; past: Plan[]; reflections: Reflection[]; next?: Plan; last?: Plan; feeling?: Feeling; rhythm?: Rhythm; forNextTime: Noted[]; promises: Noted[] };
 type Energy = 'low' | 'okay' | 'good' | null;
 type Social = 'company' | 'quiet' | null;
 type Recharge = 'alone' | 'one-on-one' | 'small-group' | '';
 // Weekdays are stored as numbers, 0 = Sunday … 6 = Saturday, matching Date.getDay().
 type Profile = { name: string; pronouns: string; recharge: Recharge; freeEvenings: number[]; intention: string; weeklyGoal: number; quietDays: number[] };
+type Usage = { month: string; questions: number; plans?: number };
 type CheckIn = { date: string; energy: Energy; social: Social; freeTonight: boolean | null; mood: string };
 type DayContext = { energy: Energy; social: Social; freeTonight: boolean | null; quietToday: boolean; recharge: Recharge; freeEvenings: number[]; intention: string };
 type DecisionResult = {
@@ -86,7 +93,10 @@ type DecisionResult = {
   followUp: string | null;
   matchedPeople: Person[];
   matchedPlans: Plan[];
+  // "Who should I connect with?": one concrete idea per person, best first.
+  ideas?: ConnectIdea[];
 } | null;
+type ConnectIdea = { personId: string; name: string; action: string; why: string[]; tip: string; message: string };
 
 const reflectionPrompts = [
   'What felt meaningful today?',
@@ -148,26 +158,17 @@ const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'about', 'that',
 
 const wordsOf = (text: string): string[] => text.toLowerCase().match(/[a-z0-9']+/g) || [];
 
-// A simple, transparent feeling check: counts warm and draining words in a reflection.
-const warmWords = new Set(['good', 'great', 'lovely', 'happy', 'warm', 'close', 'fun', 'easy', 'calm', 'relaxed', 'relaxing', 'enjoyed', 'enjoyable', 'grateful', 'thankful', 'laughed', 'laughing', 'meaningful', 'nourishing', 'restored', 'restorative', 'energised', 'energized', 'energising', 'energizing', 'connected', 'peaceful', 'glad', 'wonderful', 'supported', 'comfortable']);
-const drainingWords = new Set(['drained', 'draining', 'tired', 'exhausted', 'exhausting', 'rushed', 'stressed', 'stressful', 'tense', 'awkward', 'anxious', 'frustrated', 'frustrating', 'sad', 'upset', 'overwhelmed', 'overwhelming', 'argued', 'argument', 'distant', 'heavy', 'hurt', 'annoyed', 'lonely', 'uncomfortable', 'disappointed', 'disappointing']);
-
+// A simple, transparent feeling check (src/feelings.ts): warm and draining words and phrases.
 function feelingOf(reflection: Reflection): Feeling {
-  const words = wordsOf(reflection.text);
-  let warm = 0;
-  let draining = 0;
-  words.forEach((word, index) => {
-    const previous = words[index - 1] || '';
-    const negated = previous === 'not' || previous === 'never' || previous === 'no' || previous.endsWith("n't");
-    if (warmWords.has(word)) { if (negated) draining++; else warm++; }
-    if (drainingWords.has(word)) { if (negated) warm++; else draining++; }
-  });
-  const tone: Feeling['tone'] = warm && draining ? 'mixed' : warm ? 'positive' : draining ? 'negative' : 'neutral';
+  const { tone } = readText(reflection.text);
   const labels = { positive: 'Felt good', negative: 'Felt draining', mixed: 'Felt mixed', neutral: 'No strong feeling noted' };
   const firstSentence = (reflection.text.match(/^[^.!?\n]*[.!?]?/)?.[0] || reflection.text).trim();
-  const excerpt = firstSentence.length > 120 ? `${firstSentence.slice(0, 117).trimEnd()}…` : firstSentence;
-  return { tone, label: labels[tone], excerpt, date: reflectionDate(reflection) };
+  return { tone, label: labels[tone], excerpt: shorten(firstSentence), date: reflectionDate(reflection) };
 }
+
+const shorten = (text: string, max = 120) => text.length > max ? `${text.slice(0, max - 3).trimEnd()}…` : text;
+const firstSentenceOf = (text: string) => (text.match(/^[^.!?\n]*[.!?]?/)?.[0] || text).trim();
+const reflectionMoment = (reflection: Reflection) => `${localDateKey(new Date(reflection.created_at))}T${new Date(reflection.created_at).toTimeString().slice(0, 5)}`;
 
 // Everything Kinly knows about one person: plans before and after today, and reflections about them.
 function personInsight(person: Person, plans: Plan[], reflections: Reflection[]): PersonInsight {
@@ -175,21 +176,34 @@ function personInsight(person: Person, plans: Plan[], reflections: Reflection[])
   const upcoming = plans.filter((plan) => plan.person_id === person.id && isUpcoming(plan)).sort(bySoonest);
   const past = plans.filter((plan) => plan.person_id === person.id && !isUpcoming(plan)).sort((a, b) => bySoonest(b, a));
   const about = reflections.filter((reflection) => reflection.person_id === person.id || wordsOf(reflection.text).includes(firstName)).sort(byNewest);
-  // How you felt: the newest of your last rated plan and your last reflection.
+  // How you felt: the newest of your last rated plan and your last reflection. Words written in a
+  // check-in belong to its rating, so they don't count as a separate reflection here.
   const rated = past.find((plan) => plan.checkin?.rating);
-  const reflectedAt = about[0] ? `${localDateKey(new Date(about[0].created_at))}T${new Date(about[0].created_at).toTimeString().slice(0, 5)}` : '';
-  const feeling = rated && (!about[0] || planMoment(rated) >= reflectedAt) ? checkinFeeling(rated) : about[0] ? feelingOf(about[0]) : undefined;
-  return { upcoming, past, reflections: about, next: upcoming[0], last: past[0], feeling, rhythm: rhythmOf(past, upcoming[0]) };
+  const ratedNote = rated ? about.find((reflection) => reflection.plan_id === rated.id) : undefined;
+  const loose = about.find((reflection) => !reflection.plan_id || !plans.some((plan) => plan.id === reflection.plan_id && plan.checkin?.rating));
+  const feeling = rated && (!loose || planMoment(rated) >= reflectionMoment(loose)) ? checkinFeeling(rated, ratedNote) : loose ? feelingOf(loose) : undefined;
+  // What you wrote since you last met (or in the last 60 days, if you haven't met yet).
+  const momentOf = (reflection: Reflection) => { const linked = reflection.plan_id ? plans.find((plan) => plan.id === reflection.plan_id) : undefined; return linked ? planMoment(linked) : reflectionMoment(reflection); };
+  const since = past[0] ? planMoment(past[0]) : daysFromToday(-60);
+  const forNextTime: Noted[] = [];
+  const promises: Noted[] = [];
+  about.filter((reflection) => momentOf(reflection) >= since).forEach((reflection) => {
+    const read = readText(reflection.text);
+    read.followUps.forEach((text) => forNextTime.push({ text, date: reflectionDate(reflection) }));
+    read.promises.forEach((text) => promises.push({ text, date: reflectionDate(reflection) }));
+  });
+  return { upcoming, past, reflections: about, next: upcoming[0], last: past[0], feeling, rhythm: rhythmOf(past, upcoming[0]), forNextTime: forNextTime.slice(0, 4), promises: promises.slice(0, 3) };
 }
 
 const ratingLabels: Record<Rating, string> = { good: 'Felt good', okay: 'Felt okay', hard: 'Felt hard' };
 const ratingTones: Record<Rating, Feeling['tone']> = { good: 'positive', okay: 'neutral', hard: 'negative' };
 
-function checkinFeeling(plan: Plan): Feeling | undefined {
+function checkinFeeling(plan: Plan, note?: Reflection): Feeling | undefined {
   const rating = plan.checkin?.rating;
   if (!rating) return undefined;
   const tags = plan.checkin?.tags ?? [];
-  return { tone: ratingTones[rating], label: ratingLabels[rating], excerpt: tags.length ? `${plan.title} · ${tags.join(', ').toLowerCase()}` : plan.title, date: fmtDate(plan.plan_date) };
+  const excerpt = note ? shorten(firstSentenceOf(note.text)) : tags.length ? `${plan.title} · ${tags.join(', ').toLowerCase()}` : plan.title;
+  return { tone: ratingTones[rating], label: ratingLabels[rating], excerpt, date: fmtDate(plan.plan_date) };
 }
 
 // The usual gap between plans with someone (the median, so one long gap doesn't skew it), and
@@ -214,13 +228,12 @@ function everyPhrase(days: number): string {
   return months === 1 ? 'every month' : `every ${months} months`;
 }
 
-// Plans with someone in the last two weeks that have finished (two hours after the start) and
-// haven't been rated or put aside yet, newest first.
-function plansToRate(plans: Plan[], people: Person[]): Plan[] {
-  const now = Date.now();
+// Plans with someone in the last two weeks whose start time has passed, not yet rated or put
+// aside, newest first. Kinly doesn't know when a plan ends, so it asks once it has started.
+function plansToRate(plans: Plan[], people: Person[], now = Date.now()): Plan[] {
   return plans
     .filter((plan) => plan.person_id && people.some((person) => person.id === plan.person_id) && !plan.checkin && daysUntil(plan.plan_date) >= -14)
-    .filter((plan) => new Date(`${plan.plan_date}T${plan.plan_time.slice(0, 5)}`).getTime() + 2 * 3600000 <= now)
+    .filter((plan) => new Date(`${plan.plan_date}T${plan.plan_time.slice(0, 5)}`).getTime() <= now)
     .sort((a, b) => bySoonest(b, a));
 }
 
@@ -383,10 +396,8 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     const ideas: Memory[] = [];
     if (person.note) ideas.push({ label: 'From your note', date: '', text: person.note });
     if (insight.next?.context) ideas.push({ label: `For ${insight.next.title}`, date: relativeDay(insight.next.plan_date), text: insight.next.context });
-    insight.reflections.slice(0, 3).forEach((reflection) => {
-      const sentence = reflection.text.split(/(?<=[.!?])\s+/).find((line) => /\b(next time|ask|follow up|remember|mention|check)\b/i.test(line));
-      if (sentence) ideas.push({ label: 'From your reflection', date: reflectionDate(reflection), text: sentence.trim() });
-    });
+    insight.forNextTime.forEach((item) => ideas.push({ label: 'Ask about', date: item.date, text: item.text }));
+    insight.promises.forEach((item) => ideas.push({ label: 'You said you’d', date: item.date, text: item.text }));
     if (insight.last) ideas.push({ label: 'An easy opener', date: '', text: '“How have things been since we last caught up?”' });
     ideas.push({ label: 'A gentle question', date: '', text: '“What has been taking up most of your energy lately?” Then listen more than you advise.' });
     return { ...base, verdict: { tone: 'info', headline: `Ideas for your next talk with ${firstName}`, reason: person.note ? 'Start with what you noted — it shows you remembered.' : 'Drawn from what you have saved, plus a couple of open questions.' }, memories: ideas.slice(0, 5) };
@@ -394,22 +405,57 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
 
   // --- Who: which person in my circle could use some attention? ---
   if (kind === 'who') {
+    // Who could use you most right now: how long it's been against your usual rhythm, what you
+    // said after last time, your goals and intention, and anything you noted or promised.
     const ranked = people
       .map((item) => ({ person: item, insight: personInsight(item, plans, reflections) }))
       .filter((entry) => !entry.insight.next)
-      .map((entry) => ({ ...entry, days: entry.insight.last ? -daysUntil(entry.insight.last.plan_date) : null }))
-      .sort((a, b) => {
-        // Longest gap first; warm connections and people your intention mentions get a nudge up.
-        const weight = (entry: typeof a) => (entry.days ?? 30) + (entry.insight.feeling?.tone === 'positive' ? 14 : 0) - (entry.insight.feeling?.tone === 'negative' ? 14 : 0) + (matchesIntention(entry.person, day.intention) ? 20 : 0);
-        return weight(b) - weight(a);
-      });
+      .map((entry) => {
+        const { insight, person: item } = entry;
+        const days = insight.last ? -daysUntil(insight.last.plan_date) : null;
+        const again = insight.last?.checkin?.again;
+        const onBreak = again === 'break' && days !== null && days < 30;
+        const goal = goals.find((g) => g.status === 'active' && matchesIntention(item, `${g.title} ${g.description}`));
+        const intention = matchesIntention(item, day.intention);
+        const stretch = days === null ? 25 : insight.rhythm ? Math.round(days / insight.rhythm.gap * 21) : days;
+        const score = stretch + (isDrifting(insight) ? 15 : 0) + (again === 'sooner' ? 15 : 0) - (onBreak ? 60 : 0)
+          + (insight.feeling?.tone === 'positive' ? 14 : 0) - (insight.feeling?.tone === 'negative' ? 14 : 0)
+          + (insight.forNextTime.length ? 12 : 0) + (insight.promises.length ? 12 : 0) + (goal ? 18 : 0) + (intention ? 20 : 0);
+        return { ...entry, days, goal, intention, onBreak, score };
+      })
+      .sort((a, b) => b.score - a.score);
     const top = ranked[0];
     if (!top) return { ...base, verdict: { tone: 'info', headline: 'Everyone has something planned', reason: 'You already have an upcoming plan with each person in your circle.' } };
-    const name = top.person.name.split(' ')[0];
-    const verdict: Verdict = { tone: 'go', headline: `Reach out to ${name}`, reason: top.days !== null ? `It has been ${top.days} days since your last plan together${top.insight.feeling?.tone === 'positive' ? ', and last time felt good' : ''}. A short message is enough.` : `You have nothing saved with ${name} yet — a short message is an easy start.` };
-    if (matchesIntention(top.person, day.intention)) verdict.reason += ` It fits your intention: “${day.intention}”.`;
-    const glance = ranked.slice(0, 3).map(({ person: item, insight: itemInsight, days }) => ({ label: item.name, value: days !== null ? `Last together ${days} days ago${itemInsight.feeling ? ` · ${lowerFirst(itemInsight.feeling.label)}` : ''}` : 'No time together saved yet' }));
-    return { ...base, verdict, glance, matchedPeople: ranked.slice(0, 3).map((entry) => entry.person) };
+    const ideaFor = (entry: typeof top): ConnectIdea => {
+      const { person: item, insight, days, goal, intention } = entry;
+      const name = item.name.split(' ')[0];
+      const why: string[] = [];
+      if (days === null) why.push('Nothing saved with them yet.');
+      else if (insight.rhythm) why.push(`${days} days since you met. You usually meet ${everyPhrase(insight.rhythm.gap)}.`);
+      else why.push(`${days} days since you last met.`);
+      if (insight.last?.checkin?.again === 'sooner') why.push('After last time, you wanted to see them again sooner.');
+      if (goal) why.push(`Fits your goal: “${goal.title}”.`);
+      if (intention) why.push(`Fits your intention: “${day.intention}”.`);
+      if (insight.feeling?.tone === 'positive') why.push('Last time felt good.');
+      if (insight.feeling?.tone === 'negative') why.push('Last time felt hard, so keep it light.');
+      const followUp = insight.forNextTime[0]?.text;
+      const promised = insight.promises[0]?.text;
+      const short = (text: string) => shorten(text.replace(/[.!?]+$/, ''), 70);
+      const lowEnergy = day.energy === 'low';
+      if (promised) return { personId: item.id, name, why: [...why, `You said you’d: “${promised}”`], action: 'Follow through', tip: 'Doing what you said is the warmest message there is.', message: `Hey ${name}! Here you go, as promised. How have things been?` };
+      if (followUp) return { personId: item.id, name, why: [...why, `You noted: “${followUp}”`], action: 'Send a text', tip: 'Asking about something they told you shows you were listening.', message: `Hey ${name}! I was thinking about what you said: “${short(followUp)}”. How did it go?` };
+      if (!lowEnergy && (days === null || days >= 45)) return { personId: item.id, name, why, action: 'Get on a call', tip: 'After a long gap, a 10-minute call says more than a text.', message: `Hey ${name}, it’s been too long! Free for a quick call this week?` };
+      if (!lowEnergy && insight.feeling?.tone === 'positive') return { personId: item.id, name, why, action: 'Make a plan', tip: 'It went well last time. Suggest a day so it actually happens.', message: `Hey ${name}! Last time was so good. Want to do it again? I’m free ${day.freeEvenings.length ? `on ${day.freeEvenings.map((d) => weekdayNames[d]).slice(0, 2).join(' or ')}` : 'this week'}.` };
+      if (insight.feeling?.tone === 'negative') return { personId: item.id, name, why, action: 'Send a light text', tip: 'No plan needed. A short, warm message keeps the door open.', message: `Hey ${name}, thinking of you. How have things been?` };
+      return { personId: item.id, name, why, action: 'Send a text', tip: lowEnergy ? 'Your energy is low today, so a message is plenty.' : 'Short and specific beats long and vague.', message: `Hey ${name}! How have you been? Would love to catch up soon.` };
+    };
+    // Someone you saw today doesn't need a nudge yet.
+    const ideas = ranked.filter((entry) => !entry.onBreak && entry.days !== 0).slice(0, 3).map(ideaFor);
+    const verdict: Verdict = ideas[0]
+      ? { tone: 'go', headline: `Reach out to ${ideas[0].name}`, reason: ideas[0].why.slice(0, 2).join(' ') }
+      : { tone: 'info', headline: 'No one needs a nudge right now', reason: 'You’ve seen everyone recently, or asked for a little space.' };
+    const glance = ranked.slice(0, 3).map(({ person: item, insight: itemInsight }) => ({ label: item.name, value: itemInsight.last ? `Last together ${relativeDay(itemInsight.last.plan_date)}${itemInsight.feeling ? ` · ${lowerFirst(itemInsight.feeling.label)}` : ''}` : 'No time together saved yet' }));
+    return { ...base, verdict, glance, ideas, matchedPeople: ranked.slice(0, 3).map((entry) => entry.person) };
   }
 
   const scheduleCount = upcoming.length;
@@ -466,11 +512,15 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
     if (daysSince !== null && daysSince >= 14 && !insight.next) reasonsToMeet.push(`It has been ${daysSince} days since your last plan together.`);
     if (daysSince === null && !insight.next) reasonsToMeet.push(`You have nothing planned with ${firstName}, so there is room to reconnect.`);
     if (insight.feeling?.tone === 'positive') reasonsToMeet.push(`Last time with ${firstName} felt good.`);
+    if (insight.last?.checkin?.after === 'up') reasonsToMeet.push(`You came away energised last time.`);
+    if (insight.promises[0]) reasonsToMeet.push(`You said you’d follow up: “${insight.promises[0].text}”`);
     if (relationshipGoal) reasonsToMeet.push(`It supports your goal "${relationshipGoal.title}".`);
     if (soon) reasonsToPostpone.push(`You are already seeing ${firstName} ${relativeDay(soon.plan_date)} ("${soon.title}").`);
     if (weekCount >= 3 && !lightTouch) reasonsToPostpone.push(`You already have ${weekCount} plans in the next 7 days.`);
     if (restGoal && !lightTouch) reasonsToPostpone.push(`You have a ${restGoal.category.toLowerCase()} goal: "${restGoal.title}".`);
     if (insight.feeling?.tone === 'negative') reasonsToPostpone.push(`Last time with ${firstName} felt draining.`);
+    if (insight.last?.checkin?.after === 'down') reasonsToPostpone.push(`You came away tired last time${energy === 'low' ? ', and your energy is low today' : ''}.`);
+    if (insight.last?.checkin?.again === 'break' && -daysUntil(insight.last.plan_date) < 30) reasonsToPostpone.push(`After last time, you said you wanted a little break.`);
     if (energy === 'good' && !lightTouch) reasonsToMeet.push('You said your energy is good.');
     if (energy === 'low' && !lightTouch) reasonsToPostpone.push('You said your energy is low.');
     if (day.social === 'company' && !lightTouch) reasonsToMeet.push('You said you’re up for company today.');
@@ -617,7 +667,7 @@ const weekdayOrder = [1, 2, 3, 4, 5, 6, 0];
 const personColors = ['#526579', '#3A5470', '#2E3C4D', '#4D6474', '#5B6F63', '#7A6A5C'];
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 const goalLimitMessage = `Kinly Free keeps up to ${FREE_LIMITS.goals} active goals. Mark one completed first, or explore Kinly Plus for unlimited goals.`;
-const planLimitMessage = `Kinly Free keeps up to ${FREE_LIMITS.plans} upcoming plans. Past plans don’t count. Explore Kinly Plus for unlimited plans.`;
+const planLimitMessage = `Kinly Free includes ${FREE_LIMITS.plans} new plans a month. Deleting a plan doesn’t give it back, and the count starts again on the 1st. Explore Kinly Plus for unlimited plans.`;
 const countActive = (goals: { status: string }[]) => goals.filter((goal) => goal.status === 'active').length;
 // Fields every saved item must have; used to check backup files before importing them.
 const collectionFields = {
@@ -659,7 +709,8 @@ function App() {
   // Shown when someone tries to go past a Free limit; dismissible and never repeated on its own.
   const [limitNotice, setLimitNotice] = useState<NoticeKind | null>(null);
   // Questions asked this calendar month, kept in this browser.
-  const [questionUsage, setQuestionUsage] = useState<{ month: string; questions: number }>({ month: '', questions: 0 });
+  // This month's Free usage: questions asked and plans added. Deleting doesn't take either back.
+  const [questionUsage, setQuestionUsage] = useState<Usage>({ month: '', questions: 0 });
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -690,7 +741,7 @@ function App() {
     setProfile(loadedProfile);
     setCheckins(readLocalCollection<CheckIn>('checkins', []));
     setAiEnabled(readLocalCollection<{ deeperAnswers: boolean }>('settings', [{ deeperAnswers: false }])[0]?.deeperAnswers === true);
-    setQuestionUsage(readLocalCollection<{ month: string; questions: number }>('usage', [{ month: '', questions: 0 }])[0] ?? { month: '', questions: 0 });
+    setQuestionUsage(readLocalCollection<Usage>('usage', [{ month: '', questions: 0 }])[0] ?? { month: '', questions: 0 });
     setLoading(false);
   };
 
@@ -746,7 +797,16 @@ function App() {
   const activeGoals = goals.filter((goal) => goal.status === 'active');
   const activePeople = useMemo(() => people.filter((person) => !person.archived), [people]);
   // Free limits count only what is active: people who aren't archived, plans still ahead, goals not completed.
-  const activeCounts: Record<LimitKind, number> = { people: activePeople.length, plans: upcomingPlans.length, goals: activeGoals.length };
+  const monthKey = localDateKey().slice(0, 7);
+  const questionsUsed = questionUsage.month === monthKey ? questionUsage.questions : 0;
+  const plansAdded = questionUsage.month === monthKey ? questionUsage.plans ?? 0 : 0;
+  const countUsage = (change: Partial<Omit<Usage, 'month'>>) => {
+    const next = { month: monthKey, questions: questionsUsed, plans: plansAdded, ...change };
+    writeLocalCollection('usage', [next]);
+    setQuestionUsage(next);
+  };
+  // People and goals count what is active; plans count how many were added this month.
+  const activeCounts: Record<LimitKind, number> = { people: activePeople.length, plans: plansAdded, goals: activeGoals.length };
   const limits = plan.isPlus ? null : FREE_LIMITS;
   const atLimit = (kind: LimitKind) => !!limits && activeCounts[kind] >= limits[kind];
 
@@ -794,13 +854,13 @@ function App() {
     const nextPlans = editingId
       ? plans.map((plan) => plan.id === editingId ? { ...plan, ...values } : plan)
       : [...plans, { ...values, id: createLocalId() }];
-    const becomesActive = isUpcoming({ ...values, id: '' }) && !(editingId && upcomingPlans.some((item) => item.id === editingId));
-    if (limits && becomesActive && nextPlans.filter(isUpcoming).length > limits.plans) { setError(planLimitMessage); return; }
+    if (limits && !editingId && plansAdded >= limits.plans) { setError(planLimitMessage); return; }
     writeLocalCollection('plans', nextPlans);
+    if (!editingId) countUsage({ plans: plansAdded + 1 });
     setModal(null); setEditingId(null); loadData();
   };
 
-  // Adds the chosen Google Calendar events as plans. Free keeps its limit on upcoming plans.
+  // Adds the chosen Google Calendar events as plans. Each one counts towards Free's monthly plans.
   const importCalendarPlans = (chosen: { event: CalendarEvent; personId: string | null }[]) => {
     const fresh = chosen.filter(({ event }) => !plans.some((plan) => plan.calendar_event_id === event.id));
     const added: Plan[] = fresh.map(({ event, personId }) => ({
@@ -808,6 +868,7 @@ function App() {
       category: personId ? 'Social' : 'Personal', context: event.location ? `At ${event.location}` : '', calendar_event_id: event.id,
     }));
     writeLocalCollection('plans', [...plans, ...added]);
+    countUsage({ plans: plansAdded + added.length });
     setModal(null);
     loadData();
   };
@@ -817,6 +878,13 @@ function App() {
     const next = plans.map((plan) => plan.id === id ? { ...plan, checkin } : plan);
     writeLocalCollection('plans', next);
     setPlans(next);
+  };
+
+  // Words written in a check-in are saved as a reflection about that person, linked to the plan.
+  const saveCheckinNote = (plan: Plan, text: string) => {
+    const next = [{ id: createLocalId(), text, created_at: new Date().toISOString(), person_id: plan.person_id, plan_id: plan.id }, ...reflections];
+    writeLocalCollection('reflections', next);
+    setReflections(next);
   };
 
   const deletePlan = async (id: string) => {
@@ -946,17 +1014,13 @@ function App() {
   };
 
   // Free includes a monthly allowance of questions; asking the same question again doesn't count.
-  const monthKey = localDateKey().slice(0, 7);
-  const questionsUsed = questionUsage.month === monthKey ? questionUsage.questions : 0;
   const questionsLeft = plan.isPlus ? null : Math.max(0, FREE_QUESTIONS_PER_MONTH - questionsUsed);
   const nextMonth = new Date(); nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
   const questionsResetOn = fmtLongDate(`${localDateKey(nextMonth)}T12:00:00`);
   const countQuestion = (text: string): boolean => {
     if (!text.trim() || text === submittedQuestion || plan.isPlus) return true;
     if (questionsUsed >= FREE_QUESTIONS_PER_MONTH) { setLimitNotice('questions'); return false; }
-    const next = { month: monthKey, questions: questionsUsed + 1 };
-    writeLocalCollection('usage', [next]);
-    setQuestionUsage(next);
+    countUsage({ questions: questionsUsed + 1 });
     return true;
   };
   const submitQuestion = (override?: string) => { const text = override ?? question; if (countQuestion(text)) setSubmittedQuestion(text); };
@@ -971,7 +1035,7 @@ function App() {
   const aboutYou = { social: day.social === 'company' ? 'up for company' : day.social === 'quiet' ? 'wants some quiet' : 'not said', freeTonight: day.freeTonight === null ? 'not said' : day.freeTonight ? 'yes' : 'not really', mood: cut(todayCheckIn?.mood ?? '', 30), recharge: day.recharge || 'not said', intention: cut(day.intention, 160), quietDay: day.quietToday };
   const circleItem = (item: Person) => {
     const itemInsight = personInsight(item, plans, reflections);
-    return { name: cut(item.name, 80), last: itemInsight.last ? cut(`${itemInsight.last.title}, ${relativeDay(itemInsight.last.plan_date)}`, 100) : 'none saved', next: itemInsight.next ? cut(`${itemInsight.next.title}, ${relativeDay(itemInsight.next.plan_date)}`, 100) : 'none planned', feeling: itemInsight.feeling?.label || 'no reflections' };
+    return { name: cut(item.name, 80), last: itemInsight.last ? cut(`${itemInsight.last.title}, ${relativeDay(itemInsight.last.plan_date)}`, 100) : 'none saved', next: itemInsight.next ? cut(`${itemInsight.next.title}, ${relativeDay(itemInsight.next.plan_date)}`, 100) : 'none planned', feeling: itemInsight.feeling?.label || 'no reflections', usualGap: itemInsight.rhythm ? everyPhrase(itemInsight.rhythm.gap) : 'not enough history', askAbout: itemInsight.forNextTime.slice(0, 2).map((noted) => cut(noted.text, 140)), youSaidYoudDo: itemInsight.promises.slice(0, 2).map((noted) => cut(noted.text, 140)), afterLastTime: itemInsight.last?.checkin?.again === 'break' ? 'wanted a break' : itemInsight.last?.checkin?.again === 'sooner' ? 'wanted to meet again sooner' : '' };
   };
   const decisionContext = () => {
     if (!decisionResult) return { today: fmtDate(localDateKey()) };
@@ -1041,11 +1105,11 @@ function App() {
         {error && !modal && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error"><X size={15} /></button></div>}
         {limitNotice && !(limitNotice === 'questions' && page === 'home') && <UpgradeNotice kind={limitNotice} resetsOn={limitNotice === 'questions' ? questionsResetOn : undefined} onDismiss={() => setLimitNotice(null)} />}
         {loading ? <div className="loading-state"><div className="loading-dot" /><p>Preparing your space…</p></div> : <>
-          {page === 'home' && <HomePage name={profileName} onTrySamples={() => { loadExamples(); }} onReflect={() => navigate('reflections')} question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit="Advanced decision analysis weighs everything you’ve saved about the people and plans involved." />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} questionNote={limitNotice === 'questions' ? <UpgradeNotice kind="questions" resetsOn={questionsResetOn} onDismiss={() => setLimitNotice(null)} /> : questionsLeft !== null ? <p className="questions-left">{questionsLeft} of {FREE_QUESTIONS_PER_MONTH} free questions left this month · resets {questionsResetOn}</p> : null} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} onCheckin={setPlanCheckin} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
+          {page === 'home' && <HomePage name={profileName} onTrySamples={() => { loadExamples(); }} onReflect={() => navigate('reflections')} question={question} setQuestion={(v) => { setQuestion(v); setSubmittedQuestion(''); }} onSubmitQuestion={submitQuestion} decision={decisionResult} ai={<AiPanel key={`${submittedQuestion}|${energy}`} feature="decision_analysis" {...aiProps} buildContext={decisionContext} sends="this question and the related notes" benefit={decisionResult?.kind === 'who' ? 'AI looks across your whole circle and goals, picks who to reach out to, and drafts the message in a natural voice.' : 'Advanced decision analysis weighs everything you’ve saved about the people and plans involved.'} />} weekly={<AiPanel feature="weekly_review" {...aiProps} buildContext={weeklyContext} sends="this week’s plans, reflections and goals" benefit="A weekly review looks back at who you saw and how it felt, and ahead at the week to come." />} questionNote={limitNotice === 'questions' ? <UpgradeNotice kind="questions" resetsOn={questionsResetOn} onDismiss={() => setLimitNotice(null)} /> : questionsLeft !== null ? <p className="questions-left">{questionsLeft} of {FREE_QUESTIONS_PER_MONTH} free questions left this month · resets {questionsResetOn}</p> : null} energy={energy} setEnergy={setEnergy} weeklyGoal={profile.weeklyGoal} quietToday={day.quietToday} navigate={navigate} onAddPerson={() => openModal('person')} onOpenPerson={openPerson} onAddPlan={() => openModal('plan')} onCheckin={setPlanCheckin} onCheckinNote={saveCheckinNote} isPlus={plan.isPlus} questionRef={questionRef} people={activePeople} plans={upcomingPlans} allPlans={plans} reflections={reflections} goals={activeGoals} />}
           {page === 'people' && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
           {page === 'person' && selectedPerson && <PersonPage person={selectedPerson} insight={personInsight(selectedPerson, plans, reflections)} onBack={() => navigate('people')} onEdit={() => openModal('person', selectedPerson.id)} onDelete={() => deletePerson(selectedPerson.id)} onAddPlan={() => openPlanFor(selectedPerson.id)} onAsk={askAbout} onSaveReflection={saveReflection} onArchive={(archived) => archivePerson(selectedPerson.id, archived)} ai={<div className="person-ai"><AiPanel key={`prep-${selectedPerson.id}`} feature="conversation_prep" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Conversation preparation suggests an opener and what to follow up on, from your own notes." /><AiPanel key={`analysis-${selectedPerson.id}`} feature="relationship_analysis" {...aiProps} buildContext={() => personContext(selectedPerson)} sends={`your notes, plans and reflections about ${selectedPerson.name.split(' ')[0]}`} benefit="Detailed relationship analysis looks at the rhythm of your time together and how it has felt." /></div>} />}
           {page === 'person' && !selectedPerson && <PeoplePage search={search} setSearch={setSearch} people={filteredPeople} limit={limits?.people ?? null} activeCount={activePeople.length} onAdd={() => openModal('person')} onOpen={openPerson} onEdit={(id) => openModal('person', id)} onDelete={deletePerson} />}
-          {page === 'plans' && <PlansPage plans={plans} people={people} limit={limits?.plans ?? null} onAdd={() => openModal('plan')} onImport={calendarAvailable ? () => setModal('calendar') : undefined} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
+          {page === 'plans' && <PlansPage plans={plans} people={people} limit={limits?.plans ?? null} added={plansAdded} resetsOn={questionsResetOn} onAdd={() => openModal('plan')} onImport={calendarAvailable ? () => setModal('calendar') : undefined} onEdit={(id) => openModal('plan', id)} onDelete={deletePlan} />}
           {page === 'goals' && <GoalsPage goals={goals} limit={limits?.goals ?? null} onAdd={() => openModal('goal')} onEdit={(id) => openModal('goal', id)} onDelete={deleteGoal} onToggle={toggleGoal} />}
           {page === 'reflections' && <ReflectionsPage reflections={reflections} people={people} onSave={saveReflection} onDelete={deleteReflection} ai={reflections.length > 0 ? <AiPanel feature="reflection" {...aiProps} buildContext={reflectionContext} sends="your 10 most recent reflections" benefit="An AI reflection notices themes across what you’ve written and offers a question to sit with." /> : null} />}
           {page === 'you' && <YouPage profile={profile} onSaveProfile={saveProfile} todayCheckIn={todayCheckIn} onCheckIn={updateCheckIn} checkins={checkins} people={people} plans={plans} reflections={reflections} />}
@@ -1054,7 +1118,7 @@ function App() {
       </main>
       {modal === 'person' && <PersonModal person={editingId ? people.find((item) => item.id === editingId) : undefined} defaultColor={personColors[people.length % personColors.length]} onClose={() => { setModal(null); setEditingId(null); }} onSubmit={savePerson} />}
       {modal === 'plan' && <PlanModal plan={editingId ? plans.find((item) => item.id === editingId) : undefined} presetPersonId={presetPersonId} people={activePeople} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={savePlan} />}
-      {modal === 'calendar' && <CalendarImportModal people={activePeople} plans={plans} roomLeft={limits ? Math.max(0, limits.plans - upcomingPlans.length) : null} onImport={importCalendarPlans} onClose={() => setModal(null)} />}
+      {modal === 'calendar' && <CalendarImportModal people={activePeople} plans={plans} roomLeft={limits ? Math.max(0, limits.plans - plansAdded) : null} onImport={importCalendarPlans} onClose={() => setModal(null)} />}
       {modal === 'goal' && <GoalModal goal={editingId ? goals.find((item) => item.id === editingId) : undefined} error={error} onClose={() => { setModal(null); setEditingId(null); setError(''); }} onSubmit={saveGoal} />}
     </div>
   );
@@ -1136,9 +1200,14 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[],
   const soon = plans.filter(isUpcoming).sort(bySoonest).find((plan) => daysUntil(plan.plan_date) <= 1 && people.some((person) => person.id === plan.person_id));
   if (soon) {
     const person = people.find((item) => item.id === soon.person_id) as Person;
-    const { feeling } = personInsight(person, plans, reflections);
+    const { feeling, forNextTime, promises } = personInsight(person, plans, reflections);
     const when = daysUntil(soon.plan_date) === 0 ? 'today' : 'tomorrow';
-    const brief = [person.note ? `Your note: “${person.note}”` : '', feeling ? `Last time ${lowerFirst(feeling.label)} — “${feeling.excerpt}”.` : ''].filter(Boolean).join(' ');
+    const brief = [
+      forNextTime[0] ? `Ask about: “${forNextTime[0].text}”` : '',
+      promises[0] ? `You said you’d: “${promises[0].text}”` : '',
+      person.note ? `Your note: “${person.note}”` : '',
+      feeling ? `Last time ${lowerFirst(feeling.label)} — “${feeling.excerpt}”.` : '',
+    ].filter(Boolean).slice(0, 3).join(' ');
     return {
       kicker: when === 'today' ? 'TODAY' : 'COMING UP TOMORROW',
       title: `${soon.title} with ${first(person)}, ${when} at ${fmtTime(soon.plan_time)}.`,
@@ -1166,7 +1235,7 @@ function buildMoment(people: Person[], plans: Plan[], reflections: Reflection[],
     const since = -daysUntil((quiet.insight.last as Plan).plan_date);
     return {
       kicker: 'A GENTLE NUDGE',
-      title: rhythm ? `You usually see ${name} ${everyPhrase(rhythm.gap)}. It’s been ${since} days.` : `It has been ${since} days since you saw ${name}.`,
+      title: quiet.insight.last?.checkin?.again === 'sooner' ? `You wanted to see ${name} again soon. It’s been ${since} days.` : rhythm ? `You usually see ${name} ${everyPhrase(rhythm.gap)}. It’s been ${since} days.` : `It has been ${since} days since you saw ${name}.`,
       text: feeling?.tone === 'positive' ? 'Last time felt good. A short message can keep things warm, no plan needed.' : 'A short message can keep things warm, no plan needed.',
       action: { label: `Should I reach out to ${name}?`, question: `Should I reach out to ${name}?` },
     };
@@ -1191,7 +1260,7 @@ const questionsAbout = (person: Person, hasPlan = false) => {
 
 const energyLevels: { value: NonNullable<Energy>; label: string }[] = [{ value: 'low', label: 'Low' }, { value: 'okay', label: 'Okay' }, { value: 'good', label: 'Good' }];
 
-function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, onCheckin, questionRef, people, plans, allPlans, reflections, goals }: { name: string; onTrySamples: () => void; onReflect: () => void; question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
+function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubmitQuestion, decision, ai, weekly, questionNote, energy, setEnergy, weeklyGoal, quietToday, navigate, onAddPerson, onOpenPerson, onAddPlan, onCheckin, onCheckinNote, isPlus, questionRef, people, plans, allPlans, reflections, goals }: { name: string; onTrySamples: () => void; onReflect: () => void; question: string; setQuestion: (value: string) => void; onSubmitQuestion: (override?: string) => void; decision: DecisionResult; ai: ReactNode; weekly: ReactNode; questionNote: ReactNode; energy: Energy; setEnergy: (value: Energy) => void; weeklyGoal: number; quietToday: boolean; navigate: (page: Page) => void; onAddPerson: () => void; onOpenPerson: (id: string) => void; onAddPlan: () => void; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; onCheckinNote: (plan: Plan, text: string) => void; isPlus: boolean; questionRef: RefObject<HTMLInputElement>; people: Person[]; plans: Plan[]; allPlans: Plan[]; reflections: Reflection[]; goals: Goal[] }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const focusPerson = people.find((person) => person.id === focusId);
   // With nothing saved yet, offer "what do I say" questions, which work without any people.
@@ -1204,70 +1273,153 @@ function HomePage({ name, onTrySamples, onReflect, question, setQuestion, onSubm
   };
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (question.trim()) onSubmitQuestion(); };
   const ask = (prompt: string) => { setQuestion(prompt); onSubmitQuestion(prompt); };
-  const askSection = <section className="ask-section">
-    <div className="section-heading"><div><span className="card-kicker">THINK IT THROUGH</span><h2>Bring a question to mind.</h2></div><CircleHelp size={18} /></div>
-    <form className="question-box" onSubmit={submit}><Search size={19} /><input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={people.length ? `e.g. Should I meet ${people[0].name.split(' ')[0]} this week?` : 'e.g. What do I say if I can only stay 10 minutes?'} aria-label="Ask about a person or plan" /><kbd>{shortcutLabel === '⌘' ? <Command size={12} /> : shortcutLabel} K</kbd><button type="submit" className="ask-button" disabled={!question.trim()}>Ask</button></form>{questionNote}
-    {people.length > 0 && <div className="ask-people"><span className="ask-label">Ask about</span>{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{person.name.split(' ')[0]}</button>)}</div>}
-    <div className="energy-row" role="group" aria-label="Your energy right now"><span className="ask-label">Your energy right now</span>{energyLevels.map((level) => <button type="button" key={level.value} className={`energy-option ${energy === level.value ? 'energy-active' : ''}`} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div>
-    <div className="prompt-list">{(focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions).map((prompt) => <button key={prompt} className="prompt-pill" onClick={() => ask(prompt)}>{prompt}<ArrowUpRight size={14} /></button>)}</div>
-    {decision && <DecisionPanel decision={decision} ai={ai} onClear={() => setQuestion('')} />}
+  const first = (person: Person) => person.name.split(' ')[0];
+  const suggestions = focusPerson ? questionsAbout(focusPerson, allPlans.some((plan) => plan.person_id === focusPerson.id && isUpcoming(plan))) : quickQuestions;
+  const askSection = <section className="ask-section ask-card">
+    <div className="ask-head">
+      <div><span className="card-kicker">ASK KINLY</span><h2>What’s on your mind?</h2><p>Answers come from what you’ve saved, with the reasons shown.</p></div>
+      {people.length > 0 && <button type="button" className="connect-button" onClick={() => ask('Who should I connect with?')}><Users size={17} /> Who should I connect with?</button>}
+    </div>
+    <form className="question-box" onSubmit={submit}>
+      <input ref={questionRef} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={focusPerson ? `Ask anything about ${first(focusPerson)}…` : people.length ? `e.g. Should I meet ${first(people[0])} this week?` : 'e.g. What do I say if I can only stay 10 minutes?'} aria-label="Ask about a person or plan" />
+      <button type="submit" className="ask-button" disabled={!question.trim()} aria-label="Ask"><span>Ask</span><ArrowRight size={17} /></button>
+    </form>
+    {questionNote}
+    <div className="ask-controls">
+      {people.length > 0 && <div className="ask-control"><span className="ask-label">About</span><div className="ask-people">{people.slice(0, 6).map((person) => <button type="button" key={person.id} className={`ask-person ${focusId === person.id ? 'ask-person-active' : ''}`} aria-pressed={focusId === person.id} onClick={() => setFocusId(focusId === person.id ? null : person.id)}><Avatar person={person} size="xs" />{first(person)}</button>)}</div></div>}
+      <div className="ask-control"><span className="ask-label">Your energy</span><div className="segmented" role="group" aria-label="Your energy right now">{energyLevels.map((level) => <button type="button" key={level.value} className={energy === level.value ? 'segmented-on' : ''} aria-pressed={energy === level.value} onClick={() => setEnergy(energy === level.value ? null : level.value)}>{level.label}</button>)}</div></div>
+    </div>
+    <div className="ask-suggestions"><span className="ask-label">{focusPerson ? `Try asking about ${first(focusPerson)}` : 'Try asking'}</span><div className="prompt-list">{suggestions.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={() => ask(prompt)}><span>{prompt}</span><ArrowUpRight size={15} /></button>)}</div></div>
+    {decision && <DecisionPanel decision={decision} ai={ai} isPlus={isPlus} onClear={() => setQuestion('')} />}
   </section>;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   const hour = new Date().getHours();
   const greeting = `${hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}${name ? `, ${name.split(' ')[0]}` : ''}.`;
   const fresh = people.length === 0;
-  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>{greeting}</h1><p className="intro">{fresh ? 'This is your private space for the people in your life. It starts empty, and it’s all yours.' : 'Think clearly about your time, your relationships, and the choices between them.'}</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section>{fresh ? <GettingStarted onAddPerson={onAddPerson} onAddPlan={onAddPlan} onReflect={onReflect} onTrySamples={onTrySamples} /> : <><CheckinCard people={people} plans={allPlans} onCheckin={onCheckin} onReflect={onReflect} /><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section></>}{askSection}{!fresh && <><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><section className="content-card weekly-review"><div><span className="card-kicker">KINLY PLUS · WEEKLY REVIEW</span><h2>Look back, look ahead</h2><p>Who you saw this week, how it felt, and what the week ahead could hold.</p></div>{weekly}</section><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></>}</div>;
+  return <div className="page-wrap home-page"><section className="welcome-row"><div><p className="eyebrow">{today}</p><h1>{greeting}</h1><p className="intro">{fresh ? 'This is your private space for the people in your life. It starts empty, and it’s all yours.' : 'Think clearly about your time, your relationships, and the choices between them.'}</p></div><button className="quiet-button" onClick={onAddPerson}><Plus size={16} /> Add a person</button></section>{fresh ? <GettingStarted onAddPerson={onAddPerson} onAddPlan={onAddPlan} onReflect={onReflect} onTrySamples={onTrySamples} /> : <><CheckinCard people={people} plans={allPlans} reflections={reflections} onCheckin={onCheckin} onNote={onCheckinNote} /><section className="reflection-card"><div className="reflection-icon"><Sparkles size={19} /></div><div className="reflection-copy"><span className="card-kicker">{moment.kicker}</span><h2>{moment.title}</h2><p>{moment.text}</p></div><button className="text-button" onClick={runMoment}>{moment.action.label} <ArrowUpRight size={15} /></button></section></>}{askSection}{!fresh && <><div className="summary-strip"><SummaryStat label="PEOPLE IN YOUR CIRCLE" value={people.length} icon={<Users size={16} />} onClick={() => navigate('people')} /><SummaryStat label="UPCOMING PLANS" value={plans.length} icon={<CalendarDays size={16} />} onClick={() => navigate('plans')} /><SummaryStat label="ACTIVE PRIORITIES" value={goals.length} icon={<Target size={16} />} onClick={() => navigate('goals')} /></div><CircleInsights people={people} plans={allPlans} reflections={reflections} weeklyGoal={weeklyGoal} onOpenPerson={onOpenPerson} onOpenYou={() => navigate('you')} /><section className="content-card weekly-review"><div><span className="card-kicker">KINLY PLUS · WEEKLY REVIEW</span><h2>Look back, look ahead</h2><p>Who you saw this week, how it felt, and what the week ahead could hold.</p></div>{weekly}</section><div className="dashboard-grid"><section className="content-card upcoming-card"><div className="card-header"><div><span className="card-kicker">YOUR WEEK</span><h2>Coming up</h2></div><button className="card-link" onClick={() => navigate('plans')}>View all <ArrowUpRight size={14} /></button></div><div className="plans-list">{plans.length ? plans.slice(0, 3).map((plan) => <PlanRow key={plan.id} plan={plan} person={people.find((person) => person.id === plan.person_id)} />) : <EmptyInline text="No plans on the horizon yet." action="Add a plan" onClick={onAddPlan} />}</div></section><section className="content-card people-preview"><div className="card-header"><div><span className="card-kicker">YOUR CIRCLE</span><h2>People</h2></div><button className="card-link" onClick={() => navigate('people')}>See directory <ArrowUpRight size={14} /></button></div><div className="mini-people">{people.slice(0, 4).map((person) => <button className="mini-person" key={person.id} onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="sm" /><span>{person.name.split(' ')[0]}</span></button>)}</div><button className="add-person-line" onClick={onAddPerson}><Plus size={15} /> Keep your circle close</button></section></div></>}</div>;
 }
 
-// "How was it?" after time with someone. One tap saves it; a few optional words add colour.
+// "How was it?" after time with someone. One tap is enough; a few questions and your own words,
+// all optional, tell Kinly more. What you write is read on this device (src/feelings.ts).
 const ratingChoices: { value: Rating; label: string; icon: ReactNode }[] = [
   { value: 'good', label: 'Good', icon: <Smile size={22} /> },
   { value: 'okay', label: 'Okay', icon: <Meh size={22} /> },
   { value: 'hard', label: 'Hard', icon: <Frown size={22} /> },
 ];
-const ratingTags: Record<Rating, string[]> = {
-  good: ['Energising', 'Meaningful', 'Fun', 'Easy'],
-  okay: ['Fine', 'Too short', 'Rushed', 'Tired'],
-  hard: ['Draining', 'Tense', 'Awkward', 'Rushed'],
+const ratingQuestions: Record<Rating, { ask: string; tags: string[] }> = {
+  good: { ask: 'What made it good?', tags: ['Felt heard', 'Laughed a lot', 'Deep conversation', 'Easy company', 'Did something new', 'Felt close again'] },
+  okay: { ask: 'What held it back?', tags: ['Mostly small talk', 'Felt rushed', 'I was tired', 'Distracted', 'A bit one-sided', 'Went on too long'] },
+  hard: { ask: 'What made it hard?', tags: ['Felt drained', 'Tension or a disagreement', 'Didn’t feel heard', 'Awkward', 'Felt one-sided', 'Worried about them'] },
 };
+const afterChoices: { value: NonNullable<PlanCheckin['after']>; label: string }[] = [{ value: 'up', label: 'Energised' }, { value: 'same', label: 'About the same' }, { value: 'down', label: 'Tired' }];
+const againChoices: { value: NonNullable<PlanCheckin['again']>; label: string }[] = [{ value: 'sooner', label: 'Sooner' }, { value: 'usual', label: 'As usual' }, { value: 'break', label: 'Need a break' }];
+const ratingFromTone = (tone: Feeling['tone']): Rating => tone === 'positive' ? 'good' : tone === 'negative' ? 'hard' : 'okay';
 
-function CheckinCard({ people, plans, onCheckin, onReflect }: { people: Person[]; plans: Plan[]; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; onReflect: () => void }) {
-  // The plan just rated stays on the card so its words can be added before moving on.
-  const [ratedId, setRatedId] = useState<string | null>(null);
-  const waiting = plansToRate(plans, people);
-  const rated = ratedId ? plans.find((plan) => plan.id === ratedId && plan.checkin?.rating) : undefined;
-  const plan = rated ?? waiting[0];
+function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value?: T; options: { value: T; label: string }[]; onChange: (value: T | undefined) => void }) {
+  return <div className="checkin-question"><span className="checkin-label">{label}</span><div className="segmented" role="group" aria-label={label}>{options.map((option) => <button type="button" key={option.value} className={value === option.value ? 'segmented-on' : ''} aria-pressed={value === option.value} onClick={() => onChange(value === option.value ? undefined : option.value)}>{option.label}</button>)}</div></div>;
+}
+
+function CheckinCard({ people, plans, reflections, onCheckin, onNote }: { people: Person[]; plans: Plan[]; reflections: Reflection[]; onCheckin: (id: string, checkin: PlanCheckin | undefined) => void; onNote: (plan: Plan, text: string) => void }) {
+  // The plan being answered stays on the card until Done, even once it's rated.
+  const [active, setActive] = useState<{ id: string; stage: 'more' | 'noted' } | null>(null);
+  const [text, setText] = useState('');
+  // Re-check every minute, so a plan that starts while Kinly is open is asked about without a reload.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60000); return () => window.clearInterval(timer); }, []);
+  const waiting = plansToRate(plans, people, now);
+  const held = active ? plans.find((plan) => plan.id === active.id && plan.checkin?.rating) : undefined;
+  const plan = held ?? waiting[0];
   if (!plan) return null;
+  const stage = held && active ? active.stage : 'rate';
   const person = people.find((item) => item.id === plan.person_id) as Person;
   const first = person.name.split(' ')[0];
   const more = waiting.filter((item) => item.id !== plan.id).length;
-  const rating = rated?.checkin?.rating;
-  const tags = rated?.checkin?.tags ?? [];
-  const toggleTag = (tag: string) => onCheckin(plan.id, { ...(rated?.checkin as PlanCheckin), tags: tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag] });
-  return <section className="checkin-card" aria-label={`How was it with ${first}?`}>
-    <div className="checkin-head">
-      <Avatar person={person} size="sm" />
-      <div><span className="card-kicker">AFTER YOUR TIME TOGETHER</span><h2>{rating ? `${ratingLabels[rating]}. Noted.` : `How was it with ${first}?`}</h2><p>{plan.title} · {relativeDay(plan.plan_date)}</p></div>
+  const checkin = held?.checkin;
+  const rating = checkin?.rating;
+  const tags = checkin?.tags ?? [];
+  const at = () => new Date().toISOString();
+  const update = (patch: Partial<PlanCheckin>) => onCheckin(plan.id, { ...(checkin as PlanCheckin), ...patch });
+  const done = () => { setActive(null); setText(''); };
+  // Words alone are enough: the rating and how you felt afterwards are read from them.
+  const saveWords = () => {
+    const words = text.trim();
+    if (!held) {
+      if (!words) return;
+      const read = readText(words);
+      onCheckin(plan.id, { rating: ratingFromTone(read.tone), tags: [], at: at(), inferred: true, ...(read.energy ? { after: read.energy } : {}) });
+    } else if (words && !checkin?.after) {
+      const energy = readText(words).energy;
+      if (energy) update({ after: energy });
+    }
+    if (words) onNote(plan, words);
+    setText('');
+    setActive({ id: plan.id, stage: 'noted' });
+  };
+  const wordsBox = (placeholder: string, rows: number) => <label className="checkin-words"><span className="checkin-label">{held ? 'In your own words' : 'Or say it in your own words'} <small>Optional</small></span><textarea value={text} onChange={(event) => setText(event.target.value)} rows={rows} placeholder={placeholder} maxLength={2000} /></label>;
+  const head = (title: string) => <div className="checkin-head"><Avatar person={person} size="sm" /><div><span className="card-kicker">AFTER YOUR TIME TOGETHER</span><h2>{title}</h2><p>{plan.title} · {relativeDay(plan.plan_date)}{daysUntil(plan.plan_date) === 0 ? ` at ${fmtTime(plan.plan_time)}` : ''}</p></div></div>;
+
+  if (stage === 'rate') return <section className="checkin-card" aria-label={`How was it with ${first}?`}>
+    {head(`How was it with ${first}?`)}
+    <div className="checkin-ratings" role="group" aria-label="How it felt">{ratingChoices.map((choice) => <button type="button" key={choice.value} className={`checkin-rating checkin-${choice.value}`} onClick={() => { onCheckin(plan.id, { rating: choice.value, tags: [], at: at() }); setActive({ id: plan.id, stage: 'more' }); }}>{choice.icon}<span>{choice.label}</span></button>)}</div>
+    {wordsBox(`e.g. Lovely dinner. ${first} has an interview on Friday, and I said I’d send the photos.`, 2)}
+    <div className="checkin-foot">{text.trim() && <button type="button" className="primary-button" onClick={saveWords}>Save</button>}<button type="button" className="text-button" onClick={() => onCheckin(plan.id, { skipped: true, at: at() })}>Didn’t happen, or skip</button>{more > 0 && <span>{more} more to rate</span>}</div>
+  </section>;
+
+  if (stage === 'more' && rating) return <section className="checkin-card" aria-label={`More about your time with ${first}`}>
+    {head(`${ratingLabels[rating]}. ${ratingQuestions[rating].ask}`)}
+    <div className="checkin-tags">{ratingQuestions[rating].tags.map((tag) => <button type="button" key={tag} className={`checkin-tag ${tags.includes(tag) ? 'checkin-tag-on' : ''}`} aria-pressed={tags.includes(tag)} onClick={() => update({ tags: tags.includes(tag) ? tags.filter((item) => item !== tag) : [...tags, tag] })}>{tags.includes(tag) && <Check size={13} />}{tag}</button>)}</div>
+    <div className="checkin-pair">
+      <Segmented label="Afterwards you felt" value={checkin?.after} options={afterChoices} onChange={(after) => update({ after })} />
+      <Segmented label={`See ${first} again`} value={checkin?.again} options={againChoices} onChange={(again) => update({ again })} />
     </div>
-    {!rating ? <>
-      <div className="checkin-ratings" role="group" aria-label="How it felt">{ratingChoices.map((choice) => <button type="button" key={choice.value} className={`checkin-rating checkin-${choice.value}`} onClick={() => { onCheckin(plan.id, { rating: choice.value, tags: [], at: new Date().toISOString() }); setRatedId(plan.id); }}>{choice.icon}<span>{choice.label}</span></button>)}</div>
-      <div className="checkin-foot"><button type="button" className="text-button" onClick={() => onCheckin(plan.id, { skipped: true, at: new Date().toISOString() })}>Didn’t happen, or skip</button>{more > 0 && <span>{more} more to rate</span>}</div>
-    </> : <>
-      <p className="checkin-ask">Anything stand out? Optional.</p>
-      <div className="checkin-tags">{ratingTags[rating].map((tag) => <button type="button" key={tag} className={`checkin-tag ${tags.includes(tag) ? 'checkin-tag-on' : ''}`} aria-pressed={tags.includes(tag)} onClick={() => toggleTag(tag)}>{tags.includes(tag) && <Check size={13} />}{tag}</button>)}</div>
-      <div className="checkin-foot">
-        <button type="button" className="primary-button" onClick={() => setRatedId(null)}>{more > 0 ? `Done · ${more} more` : 'Done'}</button>
-        <button type="button" className="text-button" onClick={onReflect}>Write a few lines instead</button>
-        <button type="button" className="text-button checkin-undo" onClick={() => { onCheckin(plan.id, undefined); setRatedId(null); }}>Undo</button>
-      </div>
-    </>}
+    {wordsBox('What did you talk about? Anything coming up for them, or anything you said you’d do?', 3)}
+    <div className="checkin-foot"><button type="button" className="primary-button" onClick={saveWords}>Save</button><button type="button" className="text-button checkin-undo" onClick={() => { onCheckin(plan.id, undefined); done(); }}>Undo</button></div>
+  </section>;
+
+  // What Kinly took from it, so it's clear the words were understood.
+  const note = reflections.find((reflection) => reflection.plan_id === plan.id);
+  const read = note ? readText(note.text) : null;
+  const noticed: { label: string; text: string }[] = [];
+  if (checkin?.after === 'up') noticed.push({ label: 'Afterwards', text: 'You came away energised.' });
+  if (checkin?.after === 'down') noticed.push({ label: 'Afterwards', text: 'You came away tired.' });
+  read?.followUps.forEach((line) => noticed.push({ label: 'Ask next time', text: `“${line}”` }));
+  read?.promises.forEach((line) => noticed.push({ label: 'You said you’d', text: `“${line}”` }));
+  if (read?.themes.length) noticed.push({ label: 'Came up', text: read.themes.join(', ') });
+  if (checkin?.again === 'break') noticed.push({ label: 'Next time', text: `Kinly won’t nudge you about ${first} for a while.` });
+  if (checkin?.again === 'sooner') noticed.push({ label: 'Next time', text: `Kinly will suggest seeing ${first} again sooner.` });
+  return <section className="checkin-card" aria-label={`What Kinly noted about your time with ${first}`}>
+    {head(`${rating ? ratingLabels[rating] : 'Saved'}${checkin?.inferred ? ', from what you wrote' : ''}. Noted.`)}
+    {checkin?.inferred && <div className="checkin-correct"><span>Not quite right?</span>{ratingChoices.map((choice) => <button type="button" key={choice.value} className={rating === choice.value ? 'segmented-on' : ''} onClick={() => update({ rating: choice.value, inferred: false })}>{choice.label}</button>)}</div>}
+    {noticed.length ? <dl className="checkin-noticed">{noticed.map((item, index) => <div key={index}><dt>{item.label}</dt><dd>{item.text}</dd></div>)}</dl> : <p className="checkin-ask">Saved. It will shape Kinly’s answers about {first}.</p>}
+    <div className="checkin-foot"><button type="button" className="primary-button" onClick={done}>{more > 0 ? `Done · ${more} more to rate` : 'Done'}</button></div>
   </section>;
 }
 
+// One line under a reflection saying what Kinly took from it.
+function NoticedLine({ text }: { text: string }) {
+  const read = readText(text);
+  const feelings = { positive: 'felt good', negative: 'felt draining', mixed: 'felt mixed', neutral: '' };
+  const bits = [
+    feelings[read.tone],
+    read.energy === 'up' ? 'left you energised' : read.energy === 'down' ? 'left you tired' : '',
+    read.themes.slice(0, 3).join(', '),
+    read.followUps.length ? `${read.followUps.length} to ask about next time` : '',
+    read.promises.length ? `${read.promises.length} thing${read.promises.length === 1 ? '' : 's'} you said you’d do` : '',
+  ].filter(Boolean);
+  if (!bits.length) return null;
+  return <p className="noticed-line"><Sparkles size={13} /> Kinly noticed: {bits.join(' · ')}</p>;
+}
+
 // No plan coming up, and either past your usual rhythm or 21 days or more since you met.
+// What you said after last time counts: "need a break" quietens nudges for a month, "sooner"
+// brings them forward.
 function isDrifting(insight: PersonInsight): boolean {
   if (!insight.last || insight.next) return false;
-  return insight.rhythm ? insight.rhythm.overdue : -daysUntil(insight.last.plan_date) >= 21;
+  const since = -daysUntil(insight.last.plan_date);
+  const again = insight.last.checkin?.again;
+  if (again === 'sooner') return since >= (insight.rhythm?.gap ?? 10);
+  const usual = insight.rhythm ? insight.rhythm.overdue : since >= 21;
+  return again === 'break' ? usual && since >= 30 : usual;
 }
 
 // A monthly read on the circle: who you saw, who feels good to be around, who may be drifting.
@@ -1289,7 +1441,7 @@ function CircleInsights({ people, plans, reflections, weeklyGoal, onOpenPerson, 
     .sort((a, b) => (b.days ?? 999) - (a.days ?? 999));
   const recent = [
     ...reflections.filter((reflection) => Date.now() - new Date(reflection.created_at).getTime() <= 30 * 86400000).map(feelingOf),
-    ...plans.filter((plan) => !isUpcoming(plan) && daysUntil(plan.plan_date) >= -30).map(checkinFeeling).filter((feeling): feeling is Feeling => !!feeling),
+    ...plans.filter((plan) => !isUpcoming(plan) && daysUntil(plan.plan_date) >= -30).map((plan) => checkinFeeling(plan)).filter((feeling): feeling is Feeling => !!feeling),
   ];
   const count = (tone: Feeling['tone']) => recent.filter((feeling) => feeling.tone === tone).length;
   const chip = (person: Person, detail?: string) => <button key={person.id} className="insight-person" onClick={() => onOpenPerson(person.id)}><Avatar person={person} size="xs" /><span>{person.name.split(' ')[0]}</span>{detail && <small>{detail}</small>}</button>;
@@ -1342,8 +1494,8 @@ function PersonPage({ person, insight, onBack, onEdit, onDelete, onAddPlan, onAs
   </div>;
 }
 
-function PlansPage({ plans, people, limit, onAdd, onImport, onEdit, onDelete }: { plans: Plan[]; people: Person[]; limit: number | null; onAdd: () => void; onImport?: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const actions = <div className="page-actions">{onImport && <button className="quiet-button" onClick={onImport}><CalendarDays size={16} /> Import from Google Calendar</button>}<button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></div>; const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); if (!plans.length) return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section><p className="sample-intro">Nothing planned yet. A plan in Kinly looks like this:</p><button type="button" className="plan-card sample-card sample-plan" onClick={onAdd}><div className="plan-card-date"><strong>Sat</strong><b>7</b><small>Nov</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">Social</span><h3>Coffee with Alex</h3></div><SampleTag /></div><p>Keep it unhurried. Ask about the new job.</p><div className="plan-card-meta"><span><Clock3 size={14} /> 10:00 AM</span><span><Users size={14} /> Alex Morgan</span></div></div></button></div>;
-  return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section>{limit && <div className="goal-limit"><CalendarDays size={16} /><span>{upcoming.length} of {limit} upcoming plans on Free · past plans don’t count</span><div className="goal-progress"><i style={{ width: `${Math.min(upcoming.length / limit * 100, 100)}%` }} /></div></div>}<div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
+function PlansPage({ plans, people, limit, added, resetsOn, onAdd, onImport, onEdit, onDelete }: { plans: Plan[]; people: Person[]; limit: number | null; added: number; resetsOn: string; onAdd: () => void; onImport?: () => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) { const actions = <div className="page-actions">{onImport && <button className="quiet-button" onClick={onImport}><CalendarDays size={16} /> Import from Google Calendar</button>}<button className="primary-button" onClick={onAdd}><Plus size={17} /> Add plan</button></div>; const upcoming = plans.filter(isUpcoming).sort(bySoonest); const past = plans.filter((plan) => !isUpcoming(plan)).sort((a, b) => bySoonest(b, a)); if (!plans.length) return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section><p className="sample-intro">Nothing planned yet. A plan in Kinly looks like this:</p><button type="button" className="plan-card sample-card sample-plan" onClick={onAdd}><div className="plan-card-date"><strong>Sat</strong><b>7</b><small>Nov</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">Social</span><h3>Coffee with Alex</h3></div><SampleTag /></div><p>Keep it unhurried. Ask about the new job.</p><div className="plan-card-meta"><span><Clock3 size={14} /> 10:00 AM</span><span><Users size={14} /> Alex Morgan</span></div></div></button></div>;
+  return <div className="page-wrap plans-page"><section className="page-heading-row"><div><p className="eyebrow">YOUR TIME</p><h1>Plans</h1><p className="intro">See what is ahead, and make room for the choices that matter.</p></div>{actions}</section>{limit && <div className="goal-limit"><CalendarDays size={16} /><span>{added} of {limit} new plans used this month on Free · resets {resetsOn}</span><div className="goal-progress"><i style={{ width: `${Math.min(added / limit * 100, 100)}%` }} /></div></div>}<div className="plan-columns"><PlanGroup title="Upcoming" plans={upcoming} people={people} onEdit={onEdit} onDelete={onDelete} empty="Nothing scheduled yet." /><PlanGroup title="Past plans" plans={past} people={people} onEdit={onEdit} onDelete={onDelete} empty="Your past plans will appear here." /></div></div>; }
 
 function PlanGroup({ title, plans, people, onEdit, onDelete, empty }: { title: string; plans: Plan[]; people: Person[]; onEdit: (id: string) => void; onDelete: (id: string) => void; empty: string }) { return <section className="plan-group"><div className="section-heading"><div><span className="card-kicker">{title === 'Upcoming' ? 'NEXT ON YOUR CALENDAR' : 'LOOKING BACK'}</span><h2>{title}</h2></div><span className="group-count">{plans.length}</span></div>{plans.length ? <div className="plan-cards">{plans.map((plan) => <article className="plan-card" key={plan.id}><div className="plan-card-date"><strong>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</strong><b>{new Date(`${plan.plan_date}T12:00:00`).getDate()}</b><small>{new Date(`${plan.plan_date}T12:00:00`).toLocaleDateString('en-US', { month: 'short' })}</small></div><div className="plan-card-main"><div className="plan-card-heading"><div><span className="category-label">{plan.category}</span><h3>{plan.title}</h3></div><div className="card-actions"><button className="card-action" onClick={() => onEdit(plan.id)} aria-label={`Edit ${plan.title}`}><Edit3 size={15} /></button><button className="card-action danger-action" onClick={() => onDelete(plan.id)} aria-label={`Delete ${plan.title}`}><Trash2 size={15} /></button></div></div><p>{plan.context || 'No context added for this plan.'}</p><div className="plan-card-meta"><span><Clock3 size={14} /> {fmtTime(plan.plan_time)}</span><span><Users size={14} /> {people.find((person) => person.id === plan.person_id)?.name || 'Personal time'}</span></div></div></article>)}</div> : <div className="empty-state compact-empty"><div className="empty-icon"><CalendarDays size={20} /></div><p>{empty}</p></div>}</section>; }
 
@@ -1369,7 +1521,27 @@ const SampleTag = () => <span className="sample-chip">Sample</span>;
 
 function EmptyInline({ text, action, onClick }: { text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span>{text}</span><button className="card-link" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
-function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<DecisionResult>; ai: ReactNode; onClear: () => void }) {
+function ConnectIdeas({ ideas, isPlus }: { ideas: ConnectIdea[]; isPlus: boolean }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (idea: ConnectIdea) => { void navigator.clipboard?.writeText(idea.message).then(() => { setCopied(idea.personId); window.setTimeout(() => setCopied(null), 1800); }); };
+  return <div className="connect-ideas">
+    <span className="card-kicker">WHAT YOU COULD DO</span>
+    {ideas.map((idea, index) => {
+      const locked = index > 0 && !isPlus;
+      return <article key={idea.personId} className={`connect-idea ${locked ? 'connect-locked' : ''}`}>
+        <div className="connect-idea-top"><strong>{idea.action} · {idea.name}</strong>{index === 0 && !isPlus && <span className="connect-badge">Free idea</span>}{locked && <span className="connect-badge connect-badge-plus">Plus</span>}</div>
+        {locked ? <p className="connect-teaser">A ready-to-send idea for {idea.name}, and why now.</p> : <>
+          <ul className="connect-why">{idea.why.map((line) => <li key={line}>{line}</li>)}</ul>
+          <blockquote className="connect-message">{idea.message}</blockquote>
+          <div className="connect-actions"><button type="button" className="quiet-button" onClick={() => copy(idea)}>{copied === idea.personId ? <><Check size={15} /> Copied</> : 'Copy message'}</button><span>{idea.tip}</span></div>
+        </>}
+      </article>;
+    })}
+    {!isPlus && ideas.length > 1 && <Link to="/pricing" className="connect-upsell"><Sparkles size={15} /> See ideas for everyone, and let AI write them in your words, with Kinly Plus <ArrowUpRight size={14} /></Link>}
+  </div>;
+}
+
+function DecisionPanel({ decision, ai, isPlus, onClear }: { decision: NonNullable<DecisionResult>; ai: ReactNode; isPlus: boolean; onClear: () => void }) {
   const { verdict } = decision;
   const kicker = { recall: 'LOOKING BACK', when: 'YOUR TIME TOGETHER', talk: 'TALKING POINTS', who: 'YOUR CIRCLE', cancel: 'KEEP OR RESCHEDULE', decide: 'YOUR ANSWER', say: 'WHAT TO SAY' }[decision.kind];
   // Recall questions are answered by the saved memories themselves, so show them up front.
@@ -1380,6 +1552,7 @@ function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<Decisi
     <div className="decision-verdict"><span className="verdict-mark" aria-hidden="true" /><div className="verdict-copy"><span className="card-kicker">{kicker}{decision.kind === 'say' ? '' : ' — FROM YOUR SAVED DATA'}</span><h3>{verdict.headline}</h3><p>{verdict.reason}</p></div><button className="icon-button decision-clear" onClick={onClear} aria-label="Clear answer"><X size={16} /></button></div>
     {decision.glance.length > 0 && <dl className="decision-glance">{decision.glance.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>}
     {decision.followUp && <div className="decision-followup"><CircleHelp size={15} /><span>{decision.followUp}</span></div>}
+    {decision.ideas && decision.ideas.length > 0 && <ConnectIdeas ideas={decision.ideas} isPlus={isPlus} />}
     {ai}
     {memoriesFirst && memories}
     {hasDetails && <details className="decision-details"><summary>See the full reasoning <ChevronRight size={14} /></summary>
@@ -1397,7 +1570,7 @@ function DecisionPanel({ decision, ai, onClear }: { decision: NonNullable<Decisi
 }
 
 function ReflectionsPage({ reflections, people, onSave, onDelete, ai }: { reflections: Reflection[]; people: Person[]; onSave: (event: FormEvent<HTMLFormElement>) => void; onDelete: (id: string) => void; ai: ReactNode }) {
-  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{ai && <div className="reflection-ai">{ai}</div>}{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p></article>)}</div> : <><p className="sample-intro">No reflections yet. A reflection can be as short as this:</p><article className="reflection-card-item sample-card"><div className="reflection-item-top"><span className="reflection-date">Saturday · After coffee with Alex</span><SampleTag /></div><p>Felt easy and warm. Alex needed to talk through the new job more than get advice. Next time, ask about the trip.</p></article></>}</section></div>;
+  return <div className="page-wrap reflections-page"><section className="page-heading-row"><div><p className="eyebrow">A QUIET PRACTICE</p><h1>Reflections</h1><p className="intro">Pause and notice what is true for you right now. Nothing needs to be solved.</p></div></section><section className="reflection-compose"><form onSubmit={onSave}><label>What is on your mind?<textarea name="text" autoFocus placeholder="Write a few lines…" required /></label>{people.length > 0 && <div className="reflection-tag"><label>About someone<span className="label-optional">Optional</span><select name="person_id" defaultValue=""><option value="">No one in particular</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>}<div className="prompt-list">{reflectionPrompts.map((prompt) => <button type="button" key={prompt} className="prompt-pill" onClick={(event) => { const ta = (event.currentTarget.closest('form')?.querySelector('textarea')); if (ta) { ta.value = prompt; ta.focus(); } }}>{prompt}<ArrowUpRight size={14} /></button>)}</div><div className="modal-actions"><button type="submit" className="primary-button"><Check size={16} /> Save reflection</button></div></form></section><section className="reflection-history"><div className="section-heading"><div><span className="card-kicker">SAVED REFLECTIONS</span><h2>Previous reflections</h2></div><span className="group-count">{reflections.length}</span></div>{ai && <div className="reflection-ai">{ai}</div>}{reflections.length ? <div className="reflection-list">{reflections.map((reflection) => <article className="reflection-card-item" key={reflection.id}><div className="reflection-item-top"><span className="reflection-date">{new Date(reflection.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} · {new Date(reflection.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{people.find((person) => person.id === reflection.person_id) && <> · About {people.find((person) => person.id === reflection.person_id)?.name}</>}</span><button className="card-action danger-action" onClick={() => onDelete(reflection.id)} aria-label="Delete reflection"><Trash2 size={15} /></button></div><p>{reflection.text}</p><NoticedLine text={reflection.text} /></article>)}</div> : <><p className="sample-intro">No reflections yet. A reflection can be as short as this:</p><article className="reflection-card-item sample-card"><div className="reflection-item-top"><span className="reflection-date">Saturday · After coffee with Alex</span><SampleTag /></div><p>Felt easy and warm. Alex needed to talk through the new job more than get advice. Next time, ask about the trip.</p></article></>}</section></div>;
 }
 
 function ColorField({ value }: { value: string }) {
@@ -1442,7 +1615,7 @@ function CalendarImportModal({ people, plans, roomLeft, onImport, onClose }: { p
           {on && people.length > 0 && <select aria-label={`Who is ${event.title} with?`} value={picked[event.id] ?? ''} onChange={(change) => setPicked({ ...picked, [event.id]: change.target.value || null })}><option value="">Personal time</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>}
         </li>;
       })}</ul> : <p className="calendar-note">No events in the next 30 days.</p>)}
-      {overLimit && <p className="form-error" role="alert">Kinly Free keeps up to {FREE_LIMITS.plans} upcoming plans, so you can add {roomLeft} more. Untick a few, or explore Kinly Plus for unlimited plans.</p>}
+      {overLimit && <p className="form-error" role="alert">Kinly Free includes {FREE_LIMITS.plans} new plans a month, so you can add {roomLeft} more this month. Untick a few, or explore Kinly Plus for unlimited plans.</p>}
       <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={!chosen.length || overLimit}><Check size={16} /> {chosen.length ? `Add ${chosen.length} ${chosen.length === 1 ? 'plan' : 'plans'}` : 'Add plans'}</button></div>
     </form>
   </ModalFrame>;
@@ -1509,6 +1682,9 @@ function findPatterns(checkins: CheckIn[], people: Person[], plans: Plan[], refl
     const insight = personInsight(person, plans, reflections);
     const tones = [...insight.reflections.map((reflection) => feelingOf(reflection).tone), ...insight.past.map((plan) => checkinFeeling(plan)?.tone).filter((tone): tone is Feeling['tone'] => !!tone)];
     const first = person.name.split(' ')[0];
+    const afters = insight.past.map((plan) => plan.checkin?.after).filter((after): after is 'up' | 'same' | 'down' => !!after);
+    if (afters.length >= 2 && afters.filter((after) => after === 'up').length / afters.length >= 0.66) patterns.push(`You usually come away from time with ${first} energised.`);
+    if (afters.length >= 2 && afters.filter((after) => after === 'down').length / afters.length >= 0.66) patterns.push(`Time with ${first} often leaves you tired. A quiet evening after may help.`);
     if (tones.length >= 2 && tones.filter((tone) => tone === 'positive').length / tones.length >= 0.66) patterns.push(`Time with ${first} usually leaves you feeling good.`);
     if (tones.length >= 2 && tones.filter((tone) => tone === 'negative').length / tones.length >= 0.66) patterns.push(`Time with ${first} has often felt draining — shorter plans may help.`);
   });

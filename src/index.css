@@ -916,3 +916,78 @@ kbd {
 .account-menu-panel > button svg, .account-menu-panel > a svg { color: var(--text-muted); }
 .account-menu-panel > button:disabled { cursor: progress; opacity: .7; }
 .account-menu-divider { height: 1px; margin: 4px 0; background: var(--border-subtle); }
+
+/* ─── Ask Kinly card (replaces the older ask row styles above) ─────────────── */
+.ask-card { margin-top: 24px; padding: 28px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-card); box-shadow: 0 24px 48px -40px rgba(32, 40, 51, .35); }
+.ask-head h2 { margin: 6px 0 4px; font-size: 30px; }
+.ask-head p { margin: 0; color: var(--text-secondary); font-size: 15.5px; }
+.ask-card .question-box { height: auto; margin-top: 20px; padding: 8px 8px 8px 20px; border: 1.5px solid var(--border-mid); border-radius: 12px; background: var(--surface-bg); }
+.ask-card .question-box:focus-within { border-color: var(--brand-500); background: var(--surface-card); box-shadow: 0 0 0 4px rgba(82, 101, 121, .12); }
+.ask-card .question-box input { min-height: 48px; font-size: 18px; }
+.ask-card .ask-button { display: inline-flex; align-items: center; gap: 6px; padding: 12px 20px; border-radius: 9px; font-size: 16px; }
+.ask-card .questions-left { margin: 10px 4px 0; font-size: 13.5px; }
+.ask-controls { display: flex; flex-wrap: wrap; gap: 14px 32px; margin-top: 20px; }
+.ask-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.ask-card .ask-people { margin-top: 0; }
+.ask-card .ask-label { margin: 0; color: var(--text-muted); font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.ask-card .ask-person { padding: 4px 13px 4px 4px; font-size: 14.5px; }
+.ask-suggestions { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border-subtle); }
+.ask-card .prompt-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.ask-card .prompt-pill { justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; border-color: var(--border-subtle); border-radius: 10px; color: var(--text-primary); background: var(--surface-bg); font-size: 15px; text-align: left; }
+.ask-card .prompt-pill svg { flex-shrink: 0; color: var(--text-muted); transition: transform .18s, color .18s; }
+.ask-card .prompt-pill:hover { border-color: var(--clay-300); background: var(--clay-50); }
+.ask-card .prompt-pill:hover svg { color: var(--clay-600); transform: translate(2px, -2px); }
+.ask-card .decision-panel { margin-top: 22px; }
+
+/* Segmented choices, used for energy and in check-ins */
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--surface-bg); }
+.segmented button { padding: 6px 14px; border: 0; border-radius: 999px; color: var(--text-secondary); background: transparent; font: inherit; font-size: 14.5px; cursor: pointer; transition: background .15s, color .15s; }
+.segmented button:hover { color: var(--brand-900); }
+.segmented .segmented-on, .segmented .segmented-on:hover { color: #FFF; background: var(--brand-900); }
+
+/* Check-in: questions, your own words, and what Kinly noted */
+.checkin-label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.checkin-label small { margin-left: 6px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.checkin-card .checkin-tags { margin-top: 16px; }
+.checkin-pair { display: flex; flex-wrap: wrap; gap: 16px 32px; margin-top: 18px; }
+.checkin-words { display: block; margin-top: 18px; }
+.checkin-words textarea { width: 100%; padding: 12px 14px; border: 1px solid var(--border-mid); border-radius: 10px; color: var(--text-primary); background: var(--surface-bg); font: inherit; font-size: 15.5px; line-height: 1.5; resize: vertical; }
+.checkin-words textarea:focus { outline: 0; border-color: var(--brand-500); background: var(--surface-card); box-shadow: 0 0 0 3px rgba(82, 101, 121, .12); }
+.checkin-noticed { display: grid; gap: 8px; margin: 16px 0 0; }
+.checkin-noticed div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; padding: 10px 14px; border-radius: 8px; background: var(--clay-50); }
+.checkin-noticed dt { color: var(--clay-ink); font-size: 12.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.checkin-noticed dd { margin: 0; color: var(--text-primary); font-size: 15px; }
+.checkin-correct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; color: var(--text-muted); font-size: 14px; }
+.checkin-correct button { padding: 5px 12px; border: 1px solid var(--border-mid); border-radius: 999px; color: var(--text-secondary); background: var(--surface-card); font: inherit; font-size: 14px; cursor: pointer; }
+.checkin-correct .segmented-on { border-color: var(--brand-900); color: #FFF; background: var(--brand-900); }
+.noticed-line { display: flex; align-items: center; gap: 6px; margin: 10px 0 0 !important; color: var(--clay-ink) !important; font-size: 13.5px !important; }
+
+@media (max-width: 700px) {
+  .ask-card { padding: 20px 16px; border-radius: 12px; }
+  .ask-head h2 { font-size: 25px; }
+  .ask-card .question-box { padding-left: 14px; }
+  .ask-card .question-box input { font-size: 16px; }
+  .ask-card .ask-button span { display: none; }
+  .ask-card .ask-button { padding: 12px 14px; }
+  .ask-card .prompt-list { grid-template-columns: 1fr; }
+  .checkin-noticed div { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* "Who should I connect with?" */
+.ask-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.connect-button { display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border: 1px solid var(--clay-300); border-radius: 999px; color: var(--clay-ink); background: var(--clay-50); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, transform .15s; }
+.connect-button:hover { border-color: var(--clay-600); background: var(--clay-100); transform: translateY(-1px); }
+.connect-ideas { display: grid; gap: 10px; margin-top: 18px; }
+.connect-idea { padding: 16px 18px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-card); }
+.connect-idea-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.connect-idea-top strong { color: var(--brand-900); font-size: 16.5px; }
+.connect-badge { padding: 2px 9px; border-radius: 999px; color: var(--color-success); background: #EEF5F0; font-size: 12px; font-weight: 600; }
+.connect-badge-plus { color: var(--clay-ink); background: var(--clay-100); }
+.connect-why { margin: 10px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 14.5px; line-height: 1.6; }
+.connect-message { margin: 12px 0 0; padding: 12px 14px; border-left: 3px solid var(--clay-300); border-radius: 0 8px 8px 0; color: var(--text-primary); background: var(--surface-bg); font-size: 15.5px; line-height: 1.55; }
+.connect-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; color: var(--text-muted); font-size: 14px; }
+.connect-locked { background: var(--surface-bg); }
+.connect-teaser { margin: 6px 0 0; color: var(--text-muted); font-size: 14.5px; }
+.connect-upsell { display: inline-flex; align-items: center; gap: 6px; color: var(--clay-600); font-size: 14.5px; font-weight: 600; text-decoration: none; }
+.connect-upsell:hover { text-decoration: underline; }
+@media (max-width: 700px) { .connect-button { width: 100%; justify-content: center; } }
