@@ -10,9 +10,8 @@ and the "maker", which is normal now and needs no nomination from anyone else.
 
 Product Hunt visitors try things straight away and comment in public, so these matter more than usual.
 
-1. **Pricing promises things Kinly doesn't do yet.** Free lists "basic reminders" and Plus lists
-   "Advanced goal alignment, reminders and follow-ups". Kinly has no reminders. Remove or reword
-   these before launch.
+1. ~~Pricing promised reminders Kinly doesn't have.~~ Fixed: Free now lists check-ins and gentle
+   nudges, and Plus lists connect ideas for everyone in your circle.
 2. **Google Calendar import is capped at 100 people.** That cap stays until Google verifies the app,
    and verification takes a few weeks. Everyone sees the "Google hasn't verified this app" screen
    until then. Submit verification now (docs/GOOGLE_VERIFICATION.md), or launch knowing that a busy
@@ -73,7 +72,7 @@ Product Hunt visitors try things straight away and comment in public, so these m
 >   clear answer, with the reasons from what you've saved.
 > - **What to say:** kind wording for cancelling, leaving early, reconnecting or saying no.
 > - **One-tap check-ins:** after a plan, tap Good / Okay / Hard, or type a line. Kinly picks out how
->   it felt, what to ask about next time and anything you promised. Then it reminds you before
+>   it felt, what to ask about next time and anything you promised, and shows it on Home before
 >   you meet again.
 > - **Who should I connect with?** It looks at who you're drifting from, your goals, and how often
 >   you usually meet, then suggests one concrete thing to do.

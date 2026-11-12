@@ -12,7 +12,7 @@ const freeFeatures = [
   `${FREE_QUESTIONS_PER_MONTH} questions a month, answered from your own notes`,
   'Unlimited reflections and notes',
   `${FREE_LIMITS.plans} new plans a month and up to ${FREE_LIMITS.goals} active goals`,
-  'Relationship history and basic reminders',
+  'Relationship history, one-tap check-ins and gentle nudges',
   'Export your data any time',
 ];
 
@@ -24,7 +24,7 @@ const plusFeatures = [
   'Relationship pattern detection and detailed analysis',
   'Weekly relationship reviews',
   'AI conversation preparation',
-  'Advanced goal alignment, reminders and follow-ups',
+  '“Who should I connect with?” ideas for everyone in your circle',
 ];
 
 const comparison: [string, string, string][] = [
