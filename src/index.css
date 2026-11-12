@@ -1005,3 +1005,5 @@ kbd {
   .welcome-actions { justify-content: flex-start; margin-top: 25px; }
   .welcome-row .welcome-actions .quiet-button { margin-top: 0; }
 }
+.welcome-row > div:first-child { min-width: 0; }
+@media (min-width: 701px) { .welcome-actions { flex-wrap: nowrap; flex-shrink: 0; } }

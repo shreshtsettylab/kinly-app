@@ -440,10 +440,9 @@ function buildDecision(query: string, people: Person[], plans: Plan[], goals: Go
       if (insight.feeling?.tone === 'negative') why.push('Last time felt hard, so keep it light.');
       const followUp = insight.forNextTime[0]?.text;
       const promised = insight.promises[0]?.text;
-      const short = (text: string) => shorten(text.replace(/[.!?]+$/, ''), 70);
       const lowEnergy = day.energy === 'low';
       if (promised) return { personId: item.id, name, why: [...why, `You said you’d: “${promised}”`], action: 'Follow through', tip: 'Doing what you said is the warmest message there is.', message: `Hey ${name}! Here you go, as promised. How have things been?` };
-      if (followUp) return { personId: item.id, name, why: [...why, `You noted: “${followUp}”`], action: 'Send a text', tip: 'Asking about something they told you shows you were listening.', message: `Hey ${name}! I was thinking about what you said: “${short(followUp)}”. How did it go?` };
+      if (followUp) return { personId: item.id, name, why: [...why, `You noted: “${followUp}”`], action: 'Send a text', tip: 'Asking about something they told you shows you were listening.', message: `Hey ${name}! Been thinking about you. ${checkInQuestion(followUp)}` };
       if (!lowEnergy && (days === null || days >= 45)) return { personId: item.id, name, why, action: 'Get on a call', tip: 'After a long gap, a 10-minute call says more than a text.', message: `Hey ${name}, it’s been too long! Free for a quick call this week?` };
       if (!lowEnergy && insight.feeling?.tone === 'positive') return { personId: item.id, name, why, action: 'Make a plan', tip: 'It went well last time. Suggest a day so it actually happens.', message: `Hey ${name}! Last time was so good. Want to do it again? I’m free ${day.freeEvenings.length ? `on ${day.freeEvenings.map((d) => weekdayNames[d]).slice(0, 2).join(' or ')}` : 'this week'}.` };
       if (insight.feeling?.tone === 'negative') return { personId: item.id, name, why, action: 'Send a light text', tip: 'No plan needed. A short, warm message keeps the door open.', message: `Hey ${name}, thinking of you. How have things been?` };
@@ -1408,6 +1407,22 @@ function NoticedLine({ text }: { text: string }) {
   ].filter(Boolean);
   if (!bits.length) return null;
   return <p className="noticed-line"><Sparkles size={13} /> Kinly noticed: {bits.join(' · ')}</p>;
+}
+
+// A natural question about something you noted, without quoting your private note back to them.
+function checkInQuestion(noted: string): string {
+  const text = noted.toLowerCase();
+  if (/\bnew job\b/.test(text)) return 'How’s the new job going?';
+  if (/\binterview\b/.test(text)) return 'How did the interview go?';
+  if (/\b(exam|exams|test|results)\b/.test(text)) return 'How did it go? Fingers crossed for you.';
+  const { themes } = readText(noted);
+  if (themes.includes('Milestones')) return 'How did the big day go?';
+  if (themes.includes('Health')) return 'How are you feeling?';
+  if (themes.includes('Home and moving')) return 'How’s the move going?';
+  if (themes.includes('Travel')) return 'How was the trip?';
+  if (themes.includes('Work')) return 'How’s work going?';
+  if (themes.includes('Family')) return 'How’s everyone doing?';
+  return 'How did it all go?';
 }
 
 // No plan coming up, and either past your usual rhythm or 21 days or more since you met.
