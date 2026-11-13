@@ -707,6 +707,8 @@ function App() {
   const plan = usePlan();
   // Shown when someone tries to go past a Free limit; dismissible and never repeated on its own.
   const [limitNotice, setLimitNotice] = useState<NoticeKind | null>(null);
+  // The notice sits at the top of the page, so bring it into view wherever the button was pressed.
+  useEffect(() => { if (limitNotice) window.scrollTo({ top: 0, behavior: 'smooth' }); }, [limitNotice]);
   // Questions asked this calendar month, kept in this browser.
   // This month's Free usage: questions asked and plans added. Deleting doesn't take either back.
   const [questionUsage, setQuestionUsage] = useState<Usage>({ month: '', questions: 0 });
