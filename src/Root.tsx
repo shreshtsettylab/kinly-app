@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { AuthProvider } from './auth/AuthProvider';
 import { Account, AuthCallback, ResetPassword } from './marketing/AuthPages';
+import Blog from './marketing/Blog';
 import Landing from './marketing/Landing';
 import NotFound from './marketing/NotFound';
 import Policy from './marketing/Policies';
@@ -25,6 +26,7 @@ const titles: Record<Route, string> = {
   privacy: 'Privacy policy — Kinly',
   refunds: 'Refund policy — Kinly',
   contact: 'Contact — Kinly',
+  blog: 'Blog — Kinly',
   notfound: 'Page not found — Kinly',
 };
 
@@ -37,12 +39,14 @@ function Screen({ route }: { route: Route }) {
   if (route === 'checkout') return <CheckoutComplete />;
   if (route === 'pricing') return <Pricing />;
   if (route === 'terms' || route === 'privacy' || route === 'refunds' || route === 'contact') return <Policy page={route} />;
+  if (route === 'blog') return <Blog />;
   if (route === 'notfound') return <NotFound />;
   return <Landing />;
 }
 
 export default function Root() {
   const route = useRoute();
-  useEffect(() => { document.title = titles[route]; }, [route]);
+  // Blog pages set their own title and description per post.
+  useEffect(() => { if (route !== 'blog') document.title = titles[route]; }, [route]);
   return <AuthProvider><Screen route={route} /></AuthProvider>;
 }

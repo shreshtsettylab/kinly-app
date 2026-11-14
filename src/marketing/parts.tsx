@@ -12,6 +12,7 @@ const navLinks = [
   { href: '#product', label: 'Product' },
   { href: '#how-it-works', label: 'How it works' },
   { href: '#features', label: 'Features' },
+  { href: '/blog', label: 'Blog', page: true },
   { href: '#pricing', label: 'Pricing' },
 ];
 
@@ -42,7 +43,7 @@ export function MarketingNav({ returning, onLanding = true }: { returning: boole
   return <header className={`lp-nav ${scrolled ? 'lp-nav-scrolled' : ''}`}>
     <div className="lp-nav-inner">
       <Link to="/" className="lp-nav-brand" aria-label="Kinly home" onClick={() => setOpen(false)}><Wordmark /></Link>
-      <nav className="lp-nav-links" aria-label="Main">{navLinks.map((link) => <a key={link.href} href={href(link.href)}>{link.label}</a>)}</nav>
+      <nav className="lp-nav-links" aria-label="Main">{navLinks.map((link) => link.page ? <Link key={link.href} to={link.href}>{link.label}</Link> : <a key={link.href} href={href(link.href)}>{link.label}</a>)}</nav>
       <div className="lp-nav-actions">
         <Link to={signedIn ? "/account" : "/signin"} className="lp-nav-signin">{signedIn ? "Account" : "Sign in"}</Link>
         <Link to="/app" className="lp-button lp-button-primary lp-button-small">{returning ? 'Open Kinly' : 'Get started'}</Link>
@@ -50,7 +51,7 @@ export function MarketingNav({ returning, onLanding = true }: { returning: boole
       </div>
     </div>
     {open && <div className="lp-mobile-menu" id="lp-mobile-menu">
-      {navLinks.map((link) => <a key={link.href} href={href(link.href)} onClick={(event) => goToSection(event, link.href)}>{link.label}</a>)}
+      {navLinks.map((link) => link.page ? <Link key={link.href} to={link.href} onClick={() => setOpen(false)}>{link.label}</Link> : <a key={link.href} href={href(link.href)} onClick={(event) => goToSection(event, link.href)}>{link.label}</a>)}
       <Link to={signedIn ? "/account" : "/signin"} onClick={() => setOpen(false)}>{signedIn ? "Account" : "Sign in"}</Link>
       <Link to="/app" className="lp-button lp-button-primary" onClick={() => setOpen(false)}>{returning ? 'Open Kinly' : 'Get started'}</Link>
     </div>}

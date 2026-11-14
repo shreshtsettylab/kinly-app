@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 // A deliberately tiny router: a handful of top-level screens is all Kinly needs, so there is
 // no dependency. Vercel serves index.html for these paths (see vercel.json).
-export type Route = 'landing' | 'app' | 'signin' | 'callback' | 'reset' | 'account' | 'checkout' | 'pricing' | 'terms' | 'privacy' | 'refunds' | 'contact' | 'notfound';
+export type Route = 'landing' | 'app' | 'signin' | 'callback' | 'reset' | 'account' | 'checkout' | 'pricing' | 'terms' | 'privacy' | 'refunds' | 'contact' | 'blog' | 'notfound';
 
 const routes: [string, Route][] = [
   ['/app', 'app'],
@@ -16,6 +16,7 @@ const routes: [string, Route][] = [
   ['/privacy', 'privacy'],
   ['/refunds', 'refunds'],
   ['/contact', 'contact'],
+  ['/blog', 'blog'],
 ];
 
 export function routeFromPath(path: string): Route {
