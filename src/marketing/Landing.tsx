@@ -2,9 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } f
 import { ArrowRight, BookOpen, CalendarDays, Check, Download, HardDrive, Lock, Sparkles, Target, Users } from 'lucide-react';
 import { analyticsEnabled } from '../analytics';
 import { authConfigured } from '../auth/supabaseClient';
-import { checkoutAvailable, checkoutIsTest, startCheckout } from '../checkout';
 import { Link } from '../Link';
-import { navigateTo } from '../router';
 import { demoAnswers, heroVariants } from './demoData';
 import { DemoBadge, DemoResponse, MarketingFooter, MarketingNav, Reveal, SectionIntro, Verdict } from './parts';
 import { hasSavedData } from './savedData';
@@ -101,30 +99,6 @@ const features = [
   { icon: Lock, tag: 'Privacy', title: 'Your notes stay on this device.', text: 'Saved in your browser. Back up or delete any time.', vignette: <div className="lp-vig-privacy"><HardDrive size={18} /><span>Stored in this browser</span><Download size={16} /></div> },
 ];
 
-// Opens Razorpay's payment window; the order and the signature check happen on the server.
-function SupportButton() {
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  async function support() {
-    setBusy(true);
-    setMessage('');
-    try {
-      const outcome = await startCheckout();
-      if (outcome.status === 'succeeded') navigateTo(`/checkout/complete?status=succeeded&payment_id=${encodeURIComponent(outcome.paymentId)}`);
-      else if (outcome.failure) setMessage(`${outcome.failure} You haven’t been charged. You can try again.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Something went wrong. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  }
-  return <>
-    <button type="button" className="lp-button lp-button-primary lp-button-block" onClick={support} disabled={busy}>{busy ? 'Opening checkout…' : 'Support Kinly early'}</button>
-    {message && <p className="lp-auth-error" role="alert">{message}</p>}
-    <p className="lp-plan-note">{checkoutIsTest ? <><b className="lp-test-badge">Test mode</b> — no real money is charged.</> : 'Secure checkout by Razorpay.'} You’ll see the price in the Razorpay window before you pay. See our <Link to="/terms">terms</Link> and <Link to="/refunds">refund policy</Link>.</p>
-  </>;
-}
-
 export default function Landing() {
   const [returning] = useState(hasSavedData);
   // Arriving from another page with a #section link: scroll once the page has rendered.
@@ -176,10 +150,10 @@ export default function Landing() {
             <Link to="/app" className="lp-button lp-button-primary lp-button-block">{returning ? 'Open Kinly' : 'Get started'}</Link>
           </article></Reveal>
           <Reveal delay={90}><article className="lp-plan lp-plan-plus">
-            <div className="lp-plan-head"><h3>Kinly Plus <span className="lp-chip">Coming soon</span></h3><p className="lp-price">₹99<span className="lp-price-per">/month</span></p><p>Or ₹999 a year. Unlimited people and questions, plus 20 AI credits a month.</p></div>
+            <div className="lp-plan-head"><h3>Kinly Plus</h3><p className="lp-price">₹99<span className="lp-price-per">/month</span></p><p>Or ₹999 a year. Unlimited people and questions, plus 20 AI credits a month.</p></div>
             <ul>{['AI reflections and weekly relationship reviews', 'Advanced decision and relationship analysis', 'AI conversation preparation', 'Unlimited people, questions, plans and goals'].map((item) => <li key={item}><span className="lp-dot" aria-hidden="true" />{item}</li>)}</ul>
-            <Link to="/pricing" className="lp-button lp-button-quiet lp-button-block">Compare plans</Link>
-            {checkoutAvailable && <div className="lp-support-early"><p>Plus payments aren’t open yet. Want to help build it now?</p><SupportButton /></div>}
+            <Link to="/pricing" className="lp-button lp-button-primary lp-button-block">Upgrade to Plus</Link>
+            <p className="lp-plan-note">Monthly or yearly, by secure Razorpay checkout. Cancel any time from your account. <Link to="/pricing">Compare plans</Link></p>
           </article></Reveal>
         </div>
       </section>
